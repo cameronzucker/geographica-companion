@@ -72,11 +72,36 @@ class Orchestrator:
                 except ProcessLookupError:
                     pass
             else:
-                job.process.terminate()
+                # Windows: kill the entire process tree via taskkill /T
+                # terminate() only kills the parent; child threads/processes survive
+                pid = job.process.pid
+                try:
+                    subprocess.run(
+                        ["taskkill", "/T", "/F", "/PID", str(pid)],
+                        capture_output=True, timeout=10,
+                    )
+                except (subprocess.SubprocessError, FileNotFoundError):
+                    # Fallback if taskkill unavailable
+                    job.process.kill()
+                try:
+                    job.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
             job.status = "cancelled"
+        # Clean up state file so next run starts fresh
+        state_name = _STATE_FILE_MAP.get(job.pipeline, job.pipeline)
+        state_file = self._output_dir / f".{state_name}-state.json"
+        if state_file.exists():
+            try:
+                state_file.unlink()
+                log.info("Removed stale state file: %s", state_file)
+            except OSError:
+                pass
+        # Remove from jobs so pipeline can be restarted
+        self._jobs.pop(job.pipeline, None)
 
     async def cancel_all(self) -> None:
-        for job in self._jobs.values():
+        for job in list(self._jobs.values()):
             if job.status == "running":
                 await self.cancel(job)
 
