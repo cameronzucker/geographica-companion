@@ -129,7 +129,7 @@ def get_orchestrator() -> Orchestrator:
     if _orchestrator is None:
         gdal_bin_dir = gdal_env.detect_gdal()
         env = gdal_env.get_gdal_env(gdal_bin_dir)
-        scripts_dir = Path(__file__).parent / "scripts"
+        scripts_dir = Path(__file__).parent / "pipelines"
         _orchestrator = Orchestrator(
             pipelines_dir=scripts_dir,
             output_dir=COMPANION_OUTPUT_DIR,
