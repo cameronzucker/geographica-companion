@@ -11,21 +11,22 @@
 <div class="app">
     <!-- Tab Bar -->
     <div class="tab-bar">
-        <button class="tab-btn active" onclick="switchTab('connect')">Connect</button>
-        <button class="tab-btn" onclick="switchTab('pipelines')">Pipelines</button>
+        <button class="tab-btn active" onclick="switchTab('imagery')">Imagery</button>
         <button class="tab-btn" onclick="switchTab('transfer')">Transfer</button>
         <button class="tab-btn" onclick="switchTab('status')">Status</button>
     </div>
 
     <!-- ============================================================ -->
-    <!-- CONNECT TAB -->
+    <!-- IMAGERY TAB (was Connect + Pipelines) -->
     <!-- ============================================================ -->
-    <div class="tab-content active" id="tab-connect">
+    <div class="tab-content active" id="tab-imagery">
+
+        <!-- Map + Bbox + Connection -->
         <div class="split-pane">
             <div class="panel">
                 <div class="section">
                     <h2>Basemap Source</h2>
-                    <p>Connect to your Raspberry Pi to use its tile server as the map background, or use a CDN fallback.</p>
+                    <p>Connect to your Pi for map tiles, or use CDN.</p>
 
                     <label for="pi-host">Pi Hostname / IP</label>
                     <input type="text" id="pi-host" placeholder="e.g. 192.168.1.100 or pandora.local" value="">
@@ -72,20 +73,11 @@
                 </div>
             </div>
         </div>
-    </div>
 
-    <!-- ============================================================ -->
-    <!-- PIPELINES TAB -->
-    <!-- ============================================================ -->
-    <div class="tab-content" id="tab-pipelines">
-        <!-- Controls bar -->
-        <!-- Bbox summary -->
-        <div class="bbox-summary" id="bbox-summary">
-            <span class="bbox-summary-label">Coverage Area:</span>
-            <span class="bbox-summary-value" id="bbox-summary-value">No bbox set — go to Connect tab to draw one</span>
-            <button class="btn-secondary btn-sm" onclick="switchTab('connect')">Edit</button>
-        </div>
+        <!-- Divider -->
+        <hr class="section-divider">
 
+        <!-- Pipeline Controls -->
         <div class="controls-bar">
             <div class="control-group">
                 <label for="gdal-threads">GDAL Threads</label>

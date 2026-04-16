@@ -410,6 +410,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     border-radius: 6px;
 }
 
+/* === SECTION DIVIDER === */
+.section-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 20px 0;
+}
+
 /* === BBOX SUMMARY === */
 .bbox-summary {
     display: flex;

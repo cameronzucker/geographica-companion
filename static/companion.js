@@ -53,9 +53,6 @@ function switchTab(name) {
         }
     });
 
-    if (name === 'pipelines') {
-        updateBboxSummary();
-    }
     if (name === 'transfer') {
         // Pre-fill host from connect tab
         const connectHost = document.getElementById('pi-host').value;
