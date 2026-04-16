@@ -64,10 +64,12 @@ class TestCSRF:
 
     @pytest.mark.asyncio
     async def test_post_with_valid_csrf_token_passes_csrf_check(self, client, csrf_token):
-        """Valid CSRF token should not get a 403 (may get other errors, but not CSRF block)."""
+        """Valid CSRF token should not get a 403 (may get other errors, but not CSRF block).
+
+        Uses /cancel (not /start) to avoid spawning real pipeline subprocesses.
+        """
         resp = await client.post(
-            "/api/pipelines/start",
-            json={"pipeline": "noaa", "args": {}},
+            "/api/pipelines/noaa/cancel",
             headers={"X-CSRF-Token": csrf_token},
         )
         assert resp.status_code != 403
