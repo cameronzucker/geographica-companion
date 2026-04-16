@@ -35,25 +35,24 @@ if not exist ".venv\Scripts\python.exe" (
 set "PYTHON=.venv\Scripts\python.exe"
 set "PIP=.venv\Scripts\pip.exe"
 
-:: Install dependencies
+:: Install dependencies (show output so errors are visible)
 echo Installing dependencies...
-"!PIP!" install -q -r requirements.txt
+"!PIP!" install -r requirements.txt
 if !errorlevel! neq 0 (
     echo ERROR: Failed to install dependencies.
     goto :fail
 )
 
-:: Set GDAL environment (outside if blocks to avoid PATH expansion issues)
-set "GDAL_FOUND=0"
-if exist "bin\windows-x64\gdalwarp.exe" set "GDAL_FOUND=1"
-
-if "!GDAL_FOUND!"=="1" (
-    set "PATH=%cd%\bin\windows-x64;!PATH!"
-    if exist "bin\windows-x64\share\proj" set "PROJ_LIB=%cd%\bin\windows-x64\share\proj"
-    if exist "bin\windows-x64\share\gdal" set "GDAL_DATA=%cd%\bin\windows-x64\share\gdal"
-    echo Using bundled GDAL
-) else (
-    echo WARNING: No bundled GDAL found. Pipelines requiring GDAL will fail.
+:: Verify critical dependency
+"!PYTHON!" -c "import rasterio; print('rasterio ' + rasterio.__version__ + ' OK')" 2>nul
+if !errorlevel! neq 0 (
+    echo.
+    echo ERROR: rasterio failed to install. Trying direct install...
+    "!PIP!" install rasterio numpy shapely pyshp
+    if !errorlevel! neq 0 (
+        echo ERROR: Could not install rasterio. Check Python version compatibility.
+        goto :fail
+    )
 )
 
 echo.

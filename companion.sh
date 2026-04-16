@@ -27,20 +27,17 @@ fi
 source .venv/bin/activate
 
 # Install/upgrade dependencies
-pip install -q -r requirements.txt
+echo "Installing dependencies..."
+pip install -r requirements.txt
 
-# Set GDAL environment
-if [ -d "$SCRIPT_DIR/bin/linux-x64" ]; then
-    export PATH="$SCRIPT_DIR/bin/linux-x64:$PATH"
-    [ -d "$SCRIPT_DIR/bin/linux-x64/share/proj" ] && export PROJ_LIB="$SCRIPT_DIR/bin/linux-x64/share/proj"
-    [ -d "$SCRIPT_DIR/bin/linux-x64/share/gdal" ] && export GDAL_DATA="$SCRIPT_DIR/bin/linux-x64/share/gdal"
-    echo "Using bundled GDAL from bin/linux-x64/"
-elif command -v gdalwarp &>/dev/null; then
-    echo "Using system GDAL: $(gdalwarp --version 2>&1 | head -1)"
-else
-    echo "WARNING: No GDAL found. Pipelines that require GDAL will fail."
-    echo "Install GDAL: sudo apt install gdal-bin"
+# Verify critical dependency
+if ! python3 -c "import rasterio" 2>/dev/null; then
+    echo "WARNING: rasterio not available via requirements.txt, trying direct install..."
+    pip install rasterio numpy shapely pyshp
 fi
 
-echo "Starting Geographica Companion..."
+# Final check
+python3 -c "import rasterio; print('rasterio ' + rasterio.__version__ + ' OK')"
+
+echo "Starting Geographica Companion at http://127.0.0.1:9000"
 python3 companion.py
