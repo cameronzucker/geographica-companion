@@ -322,10 +322,7 @@ async function startPipeline(name) {
     if (bbox) args.bbox = bbox;
 
     // Pipeline-specific args
-    if (name === 'noaa') {
-        const states = getSelectedStates();
-        if (states) args.state = states;
-    } else if (name === 'm2m') {
+    if (name === 'm2m') {
         args.m2m_username = document.getElementById('m2m-username').value;
         args.m2m_token = document.getElementById('m2m-token').value;
     } else if (name === 'sentinel') {

@@ -122,21 +122,7 @@
                     <span class="badge badge-free">FREE</span>
                 </div>
                 <div class="card-body hidden">
-                    <p>High-resolution aerial imagery from NOAA. Select states to include.</p>
-                    <label>States</label>
-                    <div class="chip-group" id="noaa-states">
-                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="AZ">AZ</span>
-                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="CA">CA</span>
-                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="CO">CO</span>
-                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="ID">ID</span>
-                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="MT">MT</span>
-                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="NV">NV</span>
-                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="NM">NM</span>
-                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="OR">OR</span>
-                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="UT">UT</span>
-                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="WA">WA</span>
-                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="WY">WY</span>
-                    </div>
+                    <p>High-resolution aerial imagery from NOAA. Downloads county mosaics that intersect your bounding box, then generates overview tiles with gdaladdo.</p>
                     <div class="progress-bar hidden" data-progress="noaa"><div class="progress-fill" style="width:0"></div></div>
                     <div class="card-status" data-status="noaa"></div>
                     <div class="btn-row">
