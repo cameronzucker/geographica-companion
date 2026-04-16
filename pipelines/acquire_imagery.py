@@ -1650,22 +1650,23 @@ async def run_noaa(args):
         # Stage 2 (reproject): M concurrent threads via ThreadPoolExecutor (CPU-bound)
         # Stage 3 (merge):     1 serial writer (SQLite write lock)
         #
-        # Stages overlap: while tile K is merging, tiles K+1..K+M are
-        # reprojecting, and tiles K+M+1..K+M+N are downloading.
-        #
-        # Auto-detect worker counts from hardware:
-        #   - Download concurrency: 4 (network bound, more doesn't help)
-        #   - Reproject workers: min(cpu_count, 6) — each uses ~2 GDAL threads
-        #     internally, so 6 workers × 2 = 12 threads on a 16-thread CPU
+        # All stages run concurrently. A single _write_progress() function
+        # owns the state file — stages update shared counters and the progress
+        # writer computes the correct phase from those counters.
         import concurrent.futures
+        import threading
 
         cpu_count = os.cpu_count() or 4
         DOWNLOAD_CONCURRENCY = min(4, total_tiles)
         REPROJECT_WORKERS = min(cpu_count, 6, total_tiles)
 
-        tiles_done = 0
-        tiles_failed = 0
+        # Shared counters (updated by each stage, read by progress writer)
+        tiles_downloaded = 0
         tiles_reprojected = 0
+        tiles_done = 0  # merged into MBTiles
+        tiles_failed = 0
+        downloads_finished = False
+        counter_lock = threading.Lock()
 
         from pipeline_security import validate_file_header
 
@@ -1677,6 +1678,33 @@ async def run_noaa(args):
             max_workers=REPROJECT_WORKERS,
             thread_name_prefix="reproject",
         )
+
+        def _write_progress():
+            """Write coherent progress from shared counters. Single source of truth."""
+            with counter_lock:
+                dl = tiles_downloaded
+                rp = tiles_reprojected
+                done = tiles_done
+                dl_done = downloads_finished
+
+            # Pick phase based on what's actively happening
+            if done == total_tiles:
+                phase = "converting"
+                detail = f"complete: {done}/{total_tiles} tiles"
+            elif not dl_done:
+                phase = "downloading"
+                detail = f"downloaded {dl}, reprojecting {rp - done}, merged {done}/{total_tiles}"
+            elif rp < dl:
+                phase = "reprojecting"
+                detail = f"reprojecting {rp}/{dl}, merged {done}/{total_tiles}"
+            else:
+                phase = "merging"
+                detail = f"merging {done}/{total_tiles} (reproject done)"
+
+            update_progress(output, "noaa", args.bbox, "n/a",
+                            done, total_tiles, phase=phase,
+                            geotiffs_downloaded=dl,
+                            geotiffs_total=total_tiles)
 
         async def _download_tile(tile_fname):
             """Download and validate a single tile."""
@@ -1725,6 +1753,7 @@ async def run_noaa(args):
 
         async def _downloader():
             """Stage 1: download tiles concurrently, feed reproject queue."""
+            nonlocal tiles_downloaded, downloads_finished
             download_tasks = []
             for idx, fname in enumerate(tile_filenames):
                 if _cancel_requested:
@@ -1737,6 +1766,9 @@ async def run_noaa(args):
                 if len(download_tasks) >= DOWNLOAD_CONCURRENCY:
                     oldest_idx, oldest_fname, oldest_task = download_tasks.pop(0)
                     dl_fname, dl_path = await oldest_task
+                    with counter_lock:
+                        tiles_downloaded += 1
+                    _write_progress()
                     await reproject_queue.put((oldest_idx, dl_fname, dl_path))
 
             for idx, fname, task in download_tasks:
@@ -1744,8 +1776,14 @@ async def run_noaa(args):
                     task.cancel()
                     continue
                 dl_fname, dl_path = await task
+                with counter_lock:
+                    tiles_downloaded += 1
+                _write_progress()
                 await reproject_queue.put((idx, dl_fname, dl_path))
 
+            with counter_lock:
+                downloads_finished = True
+            _write_progress()
             await reproject_queue.put(None)
 
         async def _reprojector():
@@ -1768,10 +1806,6 @@ async def run_noaa(args):
 
                 log.info("[%d/%d] Reprojecting %s (%d workers)",
                          idx + 1, total_tiles, tile_fname, REPROJECT_WORKERS)
-                update_progress(output, "noaa", args.bbox, "n/a",
-                                tiles_done, total_tiles, phase="reprojecting",
-                                geotiffs_downloaded=tiles_reprojected,
-                                geotiffs_total=total_tiles)
 
                 future = loop.run_in_executor(
                     reproject_pool, _reproject_tile, raw_path, tile_fname
@@ -1783,7 +1817,9 @@ async def run_noaa(args):
                 for f_idx, f_fname, f_future in pending_futures:
                     if f_future.done():
                         warped = f_future.result()
-                        tiles_reprojected += 1
+                        with counter_lock:
+                            tiles_reprojected += 1
+                        _write_progress()
                         await merge_queue.put((f_idx, f_fname, warped))
                     else:
                         still_pending.append((f_idx, f_fname, f_future))
@@ -1792,7 +1828,9 @@ async def run_noaa(args):
             # Drain remaining futures
             for f_idx, f_fname, f_future in pending_futures:
                 warped = await f_future
-                tiles_reprojected += 1
+                with counter_lock:
+                    tiles_reprojected += 1
+                _write_progress()
                 await merge_queue.put((f_idx, f_fname, warped))
 
             await merge_queue.put(None)
@@ -1810,40 +1848,34 @@ async def run_noaa(args):
                     if warped_path:
                         warped_path.unlink(missing_ok=True)
                     if warped_path is None:
-                        tiles_failed += 1
+                        with counter_lock:
+                            tiles_failed += 1
                     continue
 
                 log.info("[%d/%d] Merging %s into MBTiles",
                          idx + 1, total_tiles, tile_fname)
-                update_progress(output, "noaa", args.bbox, "n/a",
-                                tiles_done, total_tiles, phase="merging",
-                                geotiffs_downloaded=tiles_done,
-                                geotiffs_total=total_tiles)
 
                 merge_ok = await loop.run_in_executor(
                     None, _merge_tile, warped_path, idx
                 )
 
                 if merge_ok:
-                    tiles_done += 1
+                    with counter_lock:
+                        tiles_done += 1
+                    _write_progress()
                     log.info("[%d/%d] Tile %s done (%d/%d complete)",
                              idx + 1, total_tiles, tile_fname,
                              tiles_done, total_tiles)
-                    update_progress(output, "noaa", args.bbox, "n/a",
-                                    tiles_done, total_tiles, phase="processing",
-                                    geotiffs_downloaded=tiles_done,
-                                    geotiffs_total=total_tiles)
                 else:
-                    tiles_failed += 1
+                    with counter_lock:
+                        tiles_failed += 1
                     if _cancel_requested:
                         break
                     log.warning("[%d/%d] Merge failed for %s",
                                 idx + 1, total_tiles, tile_fname)
 
         # Run all 3 stages concurrently
-        update_progress(output, "noaa", args.bbox, "n/a",
-                        0, total_tiles, phase="downloading",
-                        geotiffs_downloaded=0, geotiffs_total=total_tiles)
+        _write_progress()
         log.info("Starting 3-stage pipeline: %d downloaders, %d reproject workers, 1 merger (CPUs: %d)",
                  DOWNLOAD_CONCURRENCY, REPROJECT_WORKERS, cpu_count)
         try:
