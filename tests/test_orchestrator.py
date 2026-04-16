@@ -101,3 +101,78 @@ class TestOrchestrator:
         jobs = orch.list_jobs()
         assert len(jobs) == 2
         await orch.cancel_all()
+
+    @pytest.mark.asyncio
+    async def test_crashed_subprocess_surfaces_error(self, tmp_path):
+        """A subprocess that crashes immediately must have its error surfaced."""
+        orch = Orchestrator(
+            pipelines_dir=Path(__file__).parent.parent / "pipelines",
+            output_dir=tmp_path,
+            env={},
+        )
+        script = tmp_path / "crash.py"
+        script.write_text('import sys\nprint("ImportError: No module named aiohttp", file=sys.stderr)\nsys.exit(1)\n')
+        job = PipelineJob(pipeline="crash_test", script=str(script), args=[])
+        await orch.start(job)
+        await asyncio.sleep(0.5)  # let subprocess exit
+        state = orch.read_state("crash_test")
+        assert state["status"] == "failed"
+        assert "aiohttp" in state.get("error", "")
+
+    @pytest.mark.asyncio
+    async def test_crashed_subprocess_not_masked_by_stale_state_file(self, tmp_path):
+        """A stale state file from a previous run must not hide a fresh crash."""
+        orch = Orchestrator(
+            pipelines_dir=Path(__file__).parent.parent / "pipelines",
+            output_dir=tmp_path,
+            env={},
+        )
+        # Write a stale state file from a "previous run"
+        (tmp_path / ".crash_test-state.json").write_text(
+            json.dumps({"status": "done", "detail": "old run"})
+        )
+        script = tmp_path / "crash.py"
+        script.write_text('import sys\nsys.exit(1)\n')
+        job = PipelineJob(pipeline="crash_test", script=str(script), args=[])
+        await orch.start(job)
+        await asyncio.sleep(0.5)
+        state = orch.read_state("crash_test")
+        assert state["status"] == "failed", f"Expected failed, got {state}"
+
+    @pytest.mark.asyncio
+    async def test_successful_exit_without_state_file_returns_done(self, tmp_path):
+        """A subprocess that exits 0 without writing state should show 'done'."""
+        orch = Orchestrator(
+            pipelines_dir=Path(__file__).parent.parent / "pipelines",
+            output_dir=tmp_path,
+            env={},
+        )
+        script = tmp_path / "quick_success.py"
+        script.write_text('pass\n')
+        job = PipelineJob(pipeline="quick", script=str(script), args=[])
+        await orch.start(job)
+        await asyncio.sleep(0.5)
+        state = orch.read_state("quick")
+        assert state.get("status") == "done"
+
+    @pytest.mark.asyncio
+    async def test_argparse_error_surfaces_usage_message(self, tmp_path):
+        """Simulates a pipeline failing due to bad argparse args."""
+        orch = Orchestrator(
+            pipelines_dir=Path(__file__).parent.parent / "pipelines",
+            output_dir=tmp_path,
+            env={},
+        )
+        script = tmp_path / "argparse_fail.py"
+        script.write_text(
+            'import argparse, sys\n'
+            'p = argparse.ArgumentParser()\n'
+            'p.add_argument("--bbox", required=True)\n'
+            'p.parse_args()\n'
+        )
+        job = PipelineJob(pipeline="argfail", script=str(script), args=[])
+        await orch.start(job)
+        await asyncio.sleep(0.5)
+        state = orch.read_state("argfail")
+        assert state["status"] == "failed"
+        assert "required" in state.get("error", "").lower() or "bbox" in state.get("error", "").lower()

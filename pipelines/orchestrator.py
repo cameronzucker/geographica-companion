@@ -47,11 +47,11 @@ class Orchestrator:
         script_path = job.script
         if not os.path.isabs(script_path):
             script_path = str(self._pipelines_dir / script_path)
-        cmd = [sys.executable, script_path] + job.args
+        cmd = [sys.executable, "-u", script_path] + job.args
         kwargs = {
             "env": self._env if self._env else None,
             "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,  # merge into stdout to prevent pipe deadlock
         }
         if platform.system() != "Windows":
             kwargs["preexec_fn"] = os.setsid
@@ -78,21 +78,28 @@ class Orchestrator:
                 await self.cancel(job)
 
     def read_state(self, pipeline: str) -> dict:
-        # Check if process has crashed
+        # Check if process has exited
         job = self._jobs.get(pipeline)
         if job and job.process and job.status == "running":
             rc = job.process.poll()
             if rc is not None:
-                # Process exited — capture stderr
-                stderr = ""
+                # Process exited — capture output (stderr merged into stdout)
+                output = ""
                 try:
-                    stderr = job.process.stderr.read().decode(errors="replace") if job.process.stderr else ""
+                    output = job.process.stdout.read().decode(errors="replace") if job.process.stdout else ""
                 except Exception:
                     pass
                 job.status = "completed" if rc == 0 else "failed"
-                job.error = stderr[-1000:] if stderr else f"Exit code {rc}"
+                job.error = output[-1000:] if output else (f"Exit code {rc}" if rc != 0 else None)
 
-        # Read state file if it exists
+        # Job failure/cancellation takes priority over stale state files.
+        # A state file from a previous run must not mask a fresh crash.
+        if job and job.status == "failed":
+            return {"status": "failed", "error": job.error or "Pipeline exited without writing state"}
+        if job and job.status == "cancelled":
+            return {"status": "cancelled", "error": job.error or "Cancelled by user"}
+
+        # Read state file if it exists (only reached for running/completed jobs)
         state_name = _STATE_FILE_MAP.get(pipeline, pipeline)
         state_file = self._output_dir / f".{state_name}-state.json"
         if state_file.exists():
@@ -101,9 +108,9 @@ class Orchestrator:
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # No state file — return job status if we have one
-        if job and job.status in ("failed", "cancelled"):
-            return {"status": job.status, "error": job.error or "Pipeline exited without writing state"}
+        # No state file
+        if job and job.status == "completed":
+            return {"status": "done"}
         if job and job.status == "running":
             return {"status": "starting"}
         return {}
@@ -124,6 +131,6 @@ class Orchestrator:
         returncode = await loop.run_in_executor(None, job.process.wait)
         job.status = "completed" if returncode == 0 else "failed"
         if returncode != 0:
-            stderr = job.process.stderr.read().decode() if job.process.stderr else ""
-            job.error = stderr[-500:] if stderr else f"Exit code {returncode}"
+            output = job.process.stdout.read().decode(errors="replace") if job.process.stdout else ""
+            job.error = output[-500:] if output else f"Exit code {returncode}"
         return returncode
