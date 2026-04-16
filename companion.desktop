@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Geographica Companion
+Comment=Data ingestion utility for Geographica
+Exec=bash -c 'cd "$(dirname "%k")" && ./companion.sh'
+Terminal=true
+Icon=utilities-terminal
+Categories=Utility;Science;
