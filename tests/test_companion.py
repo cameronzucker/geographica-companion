@@ -5,7 +5,7 @@ import os
 import pytest
 import pytest_asyncio
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import httpx
 from httpx import AsyncClient, ASGITransport
@@ -193,26 +193,37 @@ class TestAllStates:
 # ---------------------------------------------------------------------------
 
 class TestPipelineStart:
+    """Tests that the /start endpoint validates, builds args, and delegates to orchestrator.
+
+    Uses a mock orchestrator to prevent spawning real pipeline subprocesses —
+    real subprocess tests caused orphaned gdal_translate processes that OOM'd the Pi.
+    Arg correctness is verified separately in test_build_cli_args.py and
+    test_argparse_contract.py.
+    """
+
     @pytest.mark.asyncio
     async def test_start_noaa_pipeline(self, client, csrf_token, set_output_dir):
-        resp = await client.post(
-            "/api/pipelines/start",
-            json={
-                "pipeline": "noaa",
-                "args": {
-                    "bbox": "-112.1,33.4,-111.9,33.6",
-                    "state": "AZ",
-                    "output": str(set_output_dir / "imagery.mbtiles"),
-                    "staging": str(set_output_dir / "staging"),
+        mock_orch = MagicMock()
+        mock_orch.start = AsyncMock()
+        with patch("companion.get_orchestrator", return_value=mock_orch), \
+             patch("companion.gdal_env.detect_gdal", return_value=Path("/fake/gdal")):
+            resp = await client.post(
+                "/api/pipelines/start",
+                json={
+                    "pipeline": "noaa",
+                    "args": {
+                        "bbox": "-112.1,33.4,-111.9,33.6",
+                        "state": "AZ",
+                    },
                 },
-            },
-            headers={"X-CSRF-Token": csrf_token},
-        )
+                headers={"X-CSRF-Token": csrf_token},
+            )
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "started"
         assert data["pipeline"] == "noaa"
         assert any("--bbox=" in a for a in data["args"])
+        mock_orch.start.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_start_unknown_pipeline_returns_400(self, client, csrf_token):
@@ -226,23 +237,38 @@ class TestPipelineStart:
 
     @pytest.mark.asyncio
     async def test_start_basemap_pipeline_returns_args(self, client, csrf_token, set_output_dir):
-        resp = await client.post(
-            "/api/pipelines/start",
-            json={
-                "pipeline": "basemap",
-                "args": {
-                    "bbox": "-112.1,33.4,-111.9,33.6",
-                    "output": str(set_output_dir / "basemap.mbtiles"),
-                    "staging": str(set_output_dir / "staging"),
+        mock_orch = MagicMock()
+        mock_orch.start = AsyncMock()
+        with patch("companion.get_orchestrator", return_value=mock_orch), \
+             patch("companion.gdal_env.detect_gdal", return_value=Path("/fake/gdal")):
+            resp = await client.post(
+                "/api/pipelines/start",
+                json={
+                    "pipeline": "basemap",
+                    "args": {
+                        "bbox": "-112.1,33.4,-111.9,33.6",
+                    },
                 },
-            },
-            headers={"X-CSRF-Token": csrf_token},
-        )
+                headers={"X-CSRF-Token": csrf_token},
+            )
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "started"
         assert "--mode" in data["args"]
         assert "--bbox=-112.1,33.4,-111.9,33.6" in data["args"]
+
+    @pytest.mark.asyncio
+    async def test_start_pipeline_blocked_without_gdal(self, client, csrf_token):
+        """Pipeline start must be rejected when GDAL is not available."""
+        with patch("companion.gdal_env.detect_gdal", return_value=None), \
+             patch("companion.shutil.which", return_value=None):
+            resp = await client.post(
+                "/api/pipelines/start",
+                json={"pipeline": "noaa", "args": {"bbox": "-112,33,-111,34"}},
+                headers={"X-CSRF-Token": csrf_token},
+            )
+        assert resp.status_code == 400
+        assert "GDAL" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
