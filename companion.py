@@ -231,14 +231,40 @@ class StartRequest(BaseModel):
 # API endpoints
 # ---------------------------------------------------------------------------
 
+def _check_dependencies() -> dict:
+    """Check all required Python dependencies at startup."""
+    deps = {}
+    for pkg in ("rasterio", "numpy", "shapely", "aiohttp", "aiosqlite", "tqdm"):
+        try:
+            mod = __import__(pkg)
+            deps[pkg] = getattr(mod, "__version__", "installed")
+        except ImportError:
+            deps[pkg] = None
+    # fiona is optional (pyshp is fallback for shapefile reading)
+    for pkg in ("fiona", "shapefile"):
+        try:
+            mod = __import__(pkg)
+            deps[pkg] = getattr(mod, "__version__", getattr(mod, "__version__", "installed"))
+        except ImportError:
+            deps[pkg] = None
+    return deps
+
+
 @app.get("/api/config")
 async def get_config():
-    gdal_bin_dir = gdal_env.detect_gdal()
-    gdal_available = gdal_bin_dir is not None
+    deps = _check_dependencies()
+    rasterio_ok = deps.get("rasterio") is not None
+    missing = [k for k, v in deps.items() if v is None and k not in ("fiona", "shapefile")]
+    # fiona OR shapefile must be present (not both required)
+    if deps.get("fiona") is None and deps.get("shapefile") is None:
+        missing.append("fiona or pyshp")
     return {
         "output_dir": str(COMPANION_OUTPUT_DIR),
         "csrf_token": CSRF_TOKEN,
-        "gdal_available": gdal_available,
+        "gdal_available": rasterio_ok,  # kept for backwards compat
+        "rasterio_available": rasterio_ok,
+        "dependencies": deps,
+        "missing_dependencies": missing,
     }
 
 

@@ -26,7 +26,11 @@ async function init() {
         outputDir = cfg.output_dir;
         const outputDirEl = document.getElementById('output-dir');
         if (outputDirEl) outputDirEl.value = outputDir;
-        log('Config loaded. GDAL: ' + (cfg.gdal_available ? 'available' : 'NOT FOUND'));
+        if (cfg.missing_dependencies && cfg.missing_dependencies.length > 0) {
+            log('WARNING: Missing dependencies: ' + cfg.missing_dependencies.join(', '));
+            log('Run: pip install ' + cfg.missing_dependencies.join(' '));
+        }
+        log('Config loaded. rasterio: ' + (cfg.rasterio_available ? 'v' + (cfg.dependencies.rasterio || '?') : 'NOT INSTALLED — run pip install rasterio'));
     } catch (e) {
         log('Failed to load config: ' + e.message);
     }
