@@ -1,5 +1,364 @@
 <!DOCTYPE html>
-<html>
-<head><title>Geographica Companion</title></head>
-<body><h1>Geographica Companion</h1><p>UI placeholder.</p></body>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geographica Companion</title>
+    <link rel="stylesheet" href="/companion.css">
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+</head>
+<body>
+<div class="app">
+    <!-- Tab Bar -->
+    <div class="tab-bar">
+        <button class="tab-btn active" onclick="switchTab('connect')">Connect</button>
+        <button class="tab-btn" onclick="switchTab('pipelines')">Pipelines</button>
+        <button class="tab-btn" onclick="switchTab('transfer')">Transfer</button>
+        <button class="tab-btn" onclick="switchTab('status')">Status</button>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- CONNECT TAB -->
+    <!-- ============================================================ -->
+    <div class="tab-content active" id="tab-connect">
+        <div class="split-pane">
+            <div class="panel">
+                <div class="section">
+                    <h2>Basemap Source</h2>
+                    <p>Connect to your Raspberry Pi to use its tile server as the map background, or use a CDN fallback.</p>
+
+                    <label for="pi-host">Pi Hostname / IP</label>
+                    <input type="text" id="pi-host" placeholder="e.g. 192.168.1.100 or pandora.local" value="">
+
+                    <div class="btn-row">
+                        <button class="btn-primary" id="btn-connect" onclick="connectToPi()">Connect</button>
+                        <button class="btn-secondary" onclick="useCdnFallback()">CDN Fallback</button>
+                        <button class="btn-secondary" onclick="skipMap()">Skip Map</button>
+                    </div>
+
+                    <div id="connect-status"></div>
+                </div>
+
+                <div class="section">
+                    <label for="output-dir">Output Directory</label>
+                    <input type="text" id="output-dir" readonly>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="section">
+                    <h3>Area of Interest</h3>
+                    <p>Click and drag on the map to draw a bounding box, or enter coordinates manually.</p>
+                    <div id="minimap"></div>
+
+                    <div class="bbox-fields mt-8">
+                        <div>
+                            <label for="bbox-west">West</label>
+                            <input type="text" id="bbox-west" placeholder="-124.8" oninput="bboxFieldChanged()">
+                        </div>
+                        <div>
+                            <label for="bbox-east">East</label>
+                            <input type="text" id="bbox-east" placeholder="-102.0" oninput="bboxFieldChanged()">
+                        </div>
+                        <div>
+                            <label for="bbox-south">South</label>
+                            <input type="text" id="bbox-south" placeholder="31.3" oninput="bboxFieldChanged()">
+                        </div>
+                        <div>
+                            <label for="bbox-north">North</label>
+                            <input type="text" id="bbox-north" placeholder="49.0" oninput="bboxFieldChanged()">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- PIPELINES TAB -->
+    <!-- ============================================================ -->
+    <div class="tab-content" id="tab-pipelines">
+        <!-- Controls bar -->
+        <div class="controls-bar">
+            <div class="control-group">
+                <label for="gdal-threads">GDAL Threads</label>
+                <input type="number" id="gdal-threads" value="4" min="1" max="32">
+            </div>
+            <div class="control-group">
+                <label for="dl-concurrency">Download Concurrency</label>
+                <input type="number" id="dl-concurrency" value="4" min="1" max="16">
+            </div>
+        </div>
+
+        <!-- Card grid -->
+        <div class="card-grid" id="pipeline-cards">
+            <!-- USGS Basemap -->
+            <div class="source-card" data-pipeline="basemap" onclick="toggleCard(this)">
+                <div class="card-header">
+                    <div>
+                        <div class="card-name">USGS Basemap</div>
+                        <div class="card-meta">256px tiles, z0-14</div>
+                    </div>
+                    <span class="badge badge-free">FREE</span>
+                </div>
+                <div class="card-body hidden">
+                    <p>Standard USGS basemap tiles from The National Map.</p>
+                    <div class="progress-bar hidden" data-progress="basemap"><div class="progress-fill" style="width:0"></div></div>
+                    <div class="card-status" data-status="basemap"></div>
+                    <div class="btn-row">
+                        <button class="btn-primary btn-estimate hidden" onclick="event.stopPropagation(); estimatePipeline('basemap')">Estimate</button>
+                        <button class="btn-primary btn-start" onclick="event.stopPropagation(); startPipeline('basemap')">Start</button>
+                        <button class="btn-danger btn-cancel hidden" onclick="event.stopPropagation(); cancelPipeline('basemap')">Cancel</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- NOAA NAIP -->
+            <div class="source-card" data-pipeline="noaa" onclick="toggleCard(this)">
+                <div class="card-header">
+                    <div>
+                        <div class="card-name">NOAA NAIP</div>
+                        <div class="card-meta">County mosaics, z14-18</div>
+                    </div>
+                    <span class="badge badge-free">FREE</span>
+                </div>
+                <div class="card-body hidden">
+                    <p>High-resolution aerial imagery from NOAA. Select states to include.</p>
+                    <label>States</label>
+                    <div class="chip-group" id="noaa-states">
+                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="AZ">AZ</span>
+                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="CA">CA</span>
+                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="CO">CO</span>
+                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="ID">ID</span>
+                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="MT">MT</span>
+                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="NV">NV</span>
+                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="NM">NM</span>
+                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="OR">OR</span>
+                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="UT">UT</span>
+                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="WA">WA</span>
+                        <span class="chip" onclick="event.stopPropagation(); toggleChip(this)" data-value="WY">WY</span>
+                    </div>
+                    <div class="progress-bar hidden" data-progress="noaa"><div class="progress-fill" style="width:0"></div></div>
+                    <div class="card-status" data-status="noaa"></div>
+                    <div class="btn-row">
+                        <button class="btn-primary btn-start" onclick="event.stopPropagation(); startPipeline('noaa')">Start</button>
+                        <button class="btn-danger btn-cancel hidden" onclick="event.stopPropagation(); cancelPipeline('noaa')">Cancel</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- USGS M2M -->
+            <div class="source-card" data-pipeline="m2m" onclick="toggleCard(this)">
+                <div class="card-header">
+                    <div>
+                        <div class="card-name">USGS M2M</div>
+                        <div class="card-meta">High-res NAIP, z15-19</div>
+                    </div>
+                    <span class="badge badge-apikey">API KEY</span>
+                </div>
+                <div class="card-body hidden">
+                    <p>High-resolution NAIP via USGS Machine-to-Machine API.</p>
+                    <label for="m2m-username">M2M Username</label>
+                    <input type="text" id="m2m-username" onclick="event.stopPropagation()" autocomplete="off">
+                    <label for="m2m-token">M2M Token</label>
+                    <input type="password" id="m2m-token" onclick="event.stopPropagation()" autocomplete="new-password">
+                    <div class="progress-bar hidden" data-progress="m2m"><div class="progress-fill" style="width:0"></div></div>
+                    <div class="card-status" data-status="m2m"></div>
+                    <div class="btn-row">
+                        <button class="btn-primary btn-start" onclick="event.stopPropagation(); startPipeline('m2m')">Start</button>
+                        <button class="btn-danger btn-cancel hidden" onclick="event.stopPropagation(); cancelPipeline('m2m')">Cancel</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sentinel-2 -->
+            <div class="source-card" data-pipeline="sentinel" onclick="toggleCard(this)">
+                <div class="card-header">
+                    <div>
+                        <div class="card-name">Sentinel-2</div>
+                        <div class="card-meta">Multispectral, 10m</div>
+                    </div>
+                    <span class="badge badge-apikey">API KEY</span>
+                </div>
+                <div class="card-body hidden">
+                    <p>Copernicus Sentinel-2 multispectral imagery.</p>
+                    <label for="sentinel-key">API Key</label>
+                    <input type="password" id="sentinel-key" onclick="event.stopPropagation()" autocomplete="new-password">
+                    <div class="progress-bar hidden" data-progress="sentinel"><div class="progress-fill" style="width:0"></div></div>
+                    <div class="card-status" data-status="sentinel"></div>
+                    <div class="btn-row">
+                        <button class="btn-primary btn-start" onclick="event.stopPropagation(); startPipeline('sentinel')">Start</button>
+                        <button class="btn-danger btn-cancel hidden" onclick="event.stopPropagation(); cancelPipeline('sentinel')">Cancel</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Elevation -->
+            <div class="source-card" data-pipeline="elevation" onclick="toggleCard(this)">
+                <div class="card-header">
+                    <div>
+                        <div class="card-name">Elevation</div>
+                        <div class="card-meta">Terrain-RGB, z0-14</div>
+                    </div>
+                    <span class="badge badge-free">FREE</span>
+                </div>
+                <div class="card-body hidden">
+                    <p>Terrain-RGB elevation tiles for hillshade and contours.</p>
+                    <div class="progress-bar hidden" data-progress="elevation"><div class="progress-fill" style="width:0"></div></div>
+                    <div class="card-status" data-status="elevation"></div>
+                    <div class="btn-row">
+                        <button class="btn-primary btn-start" onclick="event.stopPropagation(); startPipeline('elevation')">Start</button>
+                        <button class="btn-danger btn-cancel hidden" onclick="event.stopPropagation(); cancelPipeline('elevation')">Cancel</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Import Custom -->
+            <div class="source-card custom" data-pipeline="import" onclick="toggleCard(this)">
+                <div class="card-header">
+                    <div>
+                        <div class="card-name">Import Custom</div>
+                        <div class="card-meta">GeoTIFF, JP2, MBTiles</div>
+                    </div>
+                    <span class="badge badge-local">LOCAL</span>
+                </div>
+                <div class="card-body hidden">
+                    <p>Import your own raster imagery files.</p>
+                    <label for="import-source">Source File Path</label>
+                    <input type="text" id="import-source" placeholder="/path/to/file.tif" onclick="event.stopPropagation()">
+                    <div class="progress-bar hidden" data-progress="import"><div class="progress-fill" style="width:0"></div></div>
+                    <div class="card-status" data-status="import"></div>
+                    <div class="btn-row">
+                        <button class="btn-primary btn-start" onclick="event.stopPropagation(); startPipeline('import')">Start</button>
+                        <button class="btn-danger btn-cancel hidden" onclick="event.stopPropagation(); cancelPipeline('import')">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- TRANSFER TAB -->
+    <!-- ============================================================ -->
+    <div class="tab-content" id="tab-transfer">
+        <div class="split-pane">
+            <div class="panel">
+                <div class="section">
+                    <h2>SSH Authentication</h2>
+                    <p>Credentials are used for this transfer only and not stored.</p>
+
+                    <label for="transfer-host">Pi Hostname / IP</label>
+                    <input type="text" id="transfer-host" autocomplete="off">
+
+                    <label for="transfer-user">Username</label>
+                    <input type="text" id="transfer-user" value="administrator" autocomplete="off">
+
+                    <label>Auth Method</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="auth-method" value="password" checked onchange="toggleAuthFields()"> Password</label>
+                        <label><input type="radio" name="auth-method" value="key" onchange="toggleAuthFields()"> SSH Key</label>
+                    </div>
+
+                    <div id="auth-password-fields">
+                        <label for="transfer-password">Password</label>
+                        <input type="password" id="transfer-password" autocomplete="new-password">
+                    </div>
+
+                    <div id="auth-key-fields" class="hidden">
+                        <label for="transfer-keypath">SSH Key Path</label>
+                        <input type="text" id="transfer-keypath" placeholder="~/.ssh/id_rsa" autocomplete="off">
+                    </div>
+
+                    <div class="btn-row">
+                        <button class="btn-blue" onclick="testConnection()">Test Connection</button>
+                    </div>
+
+                    <div id="transfer-test-result"></div>
+                    <div id="transfer-method-indicator"></div>
+
+                    <p class="cred-note">Credentials are used for this transfer only and not stored.</p>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="section">
+                    <h2>Files to Transfer</h2>
+                    <div id="transfer-file-list">
+                        <p>Loading file list...</p>
+                    </div>
+
+                    <div class="disk-stats" id="transfer-disk-stats"></div>
+
+                    <div class="btn-row mt-8">
+                        <button class="btn-primary" id="btn-transfer-all" onclick="startTransfer()" disabled>Transfer All</button>
+                    </div>
+
+                    <div id="transfer-progress"></div>
+                </div>
+
+                <div class="section">
+                    <h3>Manual Fallback</h3>
+                    <p>Copy and run these commands manually if automatic transfer fails.</p>
+
+                    <label>rsync command</label>
+                    <div class="cmd-block">
+                        <code id="cmd-rsync">rsync -avP ./geographica-data/*.mbtiles user@host:/srv/geographica/data/</code>
+                        <button class="copy-btn" onclick="copyCmd('cmd-rsync')">Copy</button>
+                    </div>
+
+                    <label>Deploy command</label>
+                    <div class="cmd-block">
+                        <code id="cmd-deploy">ssh user@host 'cd /home/administrator/Code/geographica && docker compose restart tileserver'</code>
+                        <button class="copy-btn" onclick="copyCmd('cmd-deploy')">Copy</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- STATUS TAB -->
+    <!-- ============================================================ -->
+    <div class="tab-content" id="tab-status">
+        <div class="summary-grid" id="status-summary">
+            <div class="summary-card">
+                <div class="card-label">Pipelines Complete</div>
+                <div class="card-value" id="stat-complete">0</div>
+            </div>
+            <div class="summary-card">
+                <div class="card-label">Pipelines Running</div>
+                <div class="card-value" id="stat-running">0</div>
+            </div>
+            <div class="summary-card">
+                <div class="card-label">Disk Free</div>
+                <div class="card-value" id="stat-disk-free">--</div>
+            </div>
+            <div class="summary-card">
+                <div class="card-label">Total Output</div>
+                <div class="card-value" id="stat-total-size">--</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>Pipeline Status</h3>
+            <div id="status-pipelines"></div>
+        </div>
+
+        <div class="section mt-12">
+            <h3>Completed Files</h3>
+            <div id="status-files">
+                <p>No files yet.</p>
+            </div>
+        </div>
+
+        <div class="section mt-12">
+            <h3>Log</h3>
+            <div class="log-viewer" id="log-viewer">Geographica Companion ready.\n</div>
+        </div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="/companion.js"></script>
+</body>
 </html>

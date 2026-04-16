@@ -1,0 +1,543 @@
+/* === Geographica Companion — Catppuccin Mocha === */
+
+:root {
+    --bg: #1e1e2e;
+    --surface: #181825;
+    --elevated: #313244;
+    --text: #cdd6f4;
+    --muted: #7a8299;
+    --heading: #f5f5f5;
+    --blue: #89b4fa;
+    --green: #a6e3a1;
+    --yellow: #f9e2af;
+    --red: #f38ba8;
+    --purple: #cba6f7;
+    --orange: #fab387;
+    --border: #45475a;
+}
+
+/* === RESET === */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+}
+
+.app {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 16px 20px;
+}
+
+h2 {
+    font-size: 16px;
+    color: var(--heading);
+    margin: 0 0 8px;
+}
+
+h3 {
+    font-size: 14px;
+    color: var(--heading);
+    margin: 0 0 6px;
+}
+
+p {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 0 0 8px;
+    line-height: 1.5;
+}
+
+/* === TAB BAR === */
+.tab-bar {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+}
+
+.tab-btn {
+    padding: 10px 16px;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.tab-btn:hover {
+    color: var(--text);
+}
+
+.tab-btn.active {
+    color: var(--text);
+    border-bottom-color: var(--blue);
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* === LAYOUT === */
+.split-pane {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+@media (max-width: 680px) {
+    .split-pane { grid-template-columns: 1fr; }
+}
+
+.panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* === SECTION === */
+.section {
+    background: var(--surface);
+    border-radius: 8px;
+    padding: 16px;
+}
+
+/* === FORM ELEMENTS === */
+label {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin: 8px 0 3px;
+}
+
+label:first-child {
+    margin-top: 0;
+}
+
+input, select {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--elevated);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+}
+
+input:focus, select:focus {
+    outline: none;
+    border-color: var(--blue);
+}
+
+input[type="number"] {
+    -moz-appearance: textfield;
+}
+
+input[type="file"] {
+    padding: 6px;
+    font-size: 12px;
+}
+
+/* === BUTTONS === */
+button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+button:hover { opacity: 0.85; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-primary { background: var(--green); color: var(--bg); font-weight: 600; }
+.btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.btn-danger { background: var(--red); color: var(--bg); font-weight: 600; }
+.btn-blue { background: var(--blue); color: var(--bg); font-weight: 600; }
+
+.btn-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+
+/* === AUTH BADGES === */
+.badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.badge-free { background: rgba(166,227,161,0.2); color: var(--green); }
+.badge-apikey { background: rgba(249,226,175,0.2); color: var(--yellow); }
+.badge-local { background: rgba(122,130,153,0.2); color: var(--muted); }
+
+/* === CARD GRID === */
+.card-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+@media (max-width: 480px) {
+    .card-grid { grid-template-columns: 1fr; }
+}
+
+/* === SOURCE CARDS === */
+.source-card {
+    background: var(--surface);
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: border-color 0.15s, opacity 0.2s;
+}
+
+.source-card:hover {
+    border-color: var(--blue);
+}
+
+.source-card.expanded {
+    grid-column: 1 / -1;
+    border-color: var(--blue);
+}
+
+.source-card.custom {
+    border-style: dashed;
+}
+
+.source-card .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.source-card .card-name {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.source-card .card-meta {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 2px;
+}
+
+.source-card .card-body {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+}
+
+.source-card .card-body.hidden {
+    display: none;
+}
+
+/* === STATE CHIPS === */
+.chip-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 6px 0;
+}
+
+.chip {
+    padding: 4px 10px;
+    font-size: 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--elevated);
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.chip.selected {
+    background: var(--blue);
+    border-color: var(--blue);
+    color: var(--bg);
+}
+
+/* === PROGRESS BAR === */
+.progress-bar {
+    height: 6px;
+    background: var(--elevated);
+    border-radius: 3px;
+    margin: 8px 0;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.8s ease;
+    background: var(--blue);
+}
+
+.progress-fill.green { background: var(--green); }
+.progress-fill.yellow { background: var(--yellow); }
+.progress-fill.red { background: var(--red); }
+
+.progress-fill.cancelling {
+    width: 100% !important;
+    background: var(--yellow);
+    animation: pulse-cancel 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-cancel {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+}
+
+/* === STATUS INDICATORS === */
+.status {
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin: 8px 0;
+    font-size: 12px;
+}
+
+.status-ok { background: rgba(166,227,161,0.15); color: var(--green); }
+.status-warn { background: rgba(249,226,175,0.15); color: var(--yellow); }
+.status-error { background: rgba(243,139,168,0.15); color: var(--red); }
+.status-info { background: rgba(137,180,250,0.1); color: var(--blue); }
+
+/* === FILE LIST === */
+.file-list {
+    background: var(--surface);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.file-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--elevated);
+}
+
+.file-row:last-child {
+    border-bottom: none;
+}
+
+.file-name {
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 12px;
+}
+
+.file-size {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+/* === MANUAL COMMAND BLOCK === */
+.cmd-block {
+    position: relative;
+    background: var(--elevated);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin: 6px 0;
+}
+
+.cmd-block code {
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 12px;
+    color: var(--text);
+    word-break: break-all;
+    white-space: pre-wrap;
+}
+
+.cmd-block .copy-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    padding: 4px 8px;
+    font-size: 11px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.cmd-block .copy-btn:hover {
+    color: var(--text);
+}
+
+/* === LOG VIEWER === */
+.log-viewer {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    max-height: 300px;
+    overflow-y: auto;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--muted);
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* === MINIMAP === */
+#minimap {
+    width: 100%;
+    height: 250px;
+    border-radius: 6px;
+}
+
+/* === CONTROLS BAR === */
+.controls-bar {
+    display: flex;
+    gap: 16px;
+    align-items: flex-end;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.controls-bar .control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.controls-bar label {
+    margin: 0;
+}
+
+.controls-bar input {
+    width: 80px;
+}
+
+/* === RADIO TOGGLE === */
+.radio-group {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    margin: 4px 0;
+}
+
+.radio-group label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    margin: 0;
+    border-right: 1px solid var(--border);
+    background: var(--elevated);
+    transition: background 0.15s;
+}
+
+.radio-group label:last-child {
+    border-right: none;
+}
+
+.radio-group label:has(input:checked) {
+    background: var(--blue);
+    color: var(--bg);
+}
+
+.radio-group input[type="radio"] {
+    width: auto;
+    margin: 0;
+    display: none;
+}
+
+/* === DISK STATS === */
+.disk-stats {
+    display: flex;
+    gap: 16px;
+    margin: 8px 0;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.disk-stats span {
+    color: var(--text);
+    font-weight: 500;
+}
+
+/* === SUMMARY CARDS === */
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.summary-card {
+    background: var(--surface);
+    border-radius: 8px;
+    padding: 12px;
+    border: 1px solid var(--border);
+}
+
+.summary-card .card-label {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 4px;
+}
+
+.summary-card .card-value {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+/* === CREDENTIAL NOTE === */
+.cred-note {
+    font-size: 11px;
+    color: var(--muted);
+    font-style: italic;
+    margin-top: 8px;
+}
+
+/* === BBOX FIELDS === */
+.bbox-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+
+.bbox-fields label {
+    margin: 0;
+}
+
+/* === MISC === */
+.mono {
+    font-family: 'SF Mono', 'Menlo', monospace;
+}
+
+.mt-8 { margin-top: 8px; }
+.mt-12 { margin-top: 12px; }
+.mt-16 { margin-top: 16px; }
+.mb-8 { margin-bottom: 8px; }
+.hidden { display: none !important; }

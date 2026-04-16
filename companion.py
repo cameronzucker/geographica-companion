@@ -5,6 +5,7 @@ pipelines (imagery acquisition, elevation, POI import). Binds exclusively
 to 127.0.0.1 for security.
 """
 
+import asyncio
 import os
 import secrets
 import shutil
@@ -298,6 +299,87 @@ async def get_disk():
         "disk_total": disk_usage.total,
         "files": files,
     }
+
+
+# ---------------------------------------------------------------------------
+# Transfer and deploy endpoints
+# ---------------------------------------------------------------------------
+
+OUTPUT_DIR = COMPANION_OUTPUT_DIR  # alias for clarity in transfer/deploy endpoints
+
+
+@app.post("/api/transfer/test")
+async def test_transfer_connection(request: Request):
+    body = await request.json()
+    from transfer import test_connection
+
+    result = await asyncio.to_thread(
+        test_connection,
+        host=body["host"],
+        username=body["username"],
+        password=body.get("password"),
+        key_path=body.get("key_path"),
+    )
+    return {
+        "ssh_ok": result.ssh_ok,
+        "rsync_available": result.rsync_available,
+        "data_dir_writable": result.data_dir_writable,
+        "docker_ok": result.docker_ok,
+        "disk_free_bytes": result.disk_free_bytes,
+        "repo_path": result.repo_path,
+        "transfer_method": result.transfer_method,
+        "error": result.error,
+    }
+
+
+@app.post("/api/transfer/start")
+async def start_transfer(request: Request):
+    body = await request.json()
+    files = list(OUTPUT_DIR.glob("*.mbtiles"))
+    if not files:
+        raise HTTPException(status_code=404, detail="No MBTiles files to transfer")
+
+    from transfer import transfer_all
+
+    auth_type = body.get("auth_type", "password")
+    results = await transfer_all(
+        files=files,
+        remote_host=body["host"],
+        remote_user=body["username"],
+        remote_dir="/srv/geographica/data/",
+        auth_type=auth_type,
+        password=body.get("password"),
+        key_path=body.get("key_path"),
+        progress_callback=None,
+    )
+    return {"results": results}
+
+
+@app.post("/api/deploy")
+async def deploy(request: Request):
+    body = await request.json()
+    from deploy import deploy_to_pi
+
+    filenames = [f.name for f in OUTPUT_DIR.glob("*.mbtiles")]
+    result = await asyncio.to_thread(
+        deploy_to_pi,
+        host=body["host"],
+        username=body["username"],
+        password=body.get("password"),
+        key_path=body.get("key_path"),
+        repo_path=body.get("repo_path", "/home/administrator/Code/geographica"),
+        filenames=filenames,
+    )
+    return result
+
+
+@app.get("/api/deploy/script")
+async def get_deploy_script(repo_path: str = "/home/administrator/Code/geographica"):
+    from deploy import generate_deploy_script
+
+    filenames = [f.name for f in OUTPUT_DIR.glob("*.mbtiles")]
+    script = generate_deploy_script(filenames, repo_path)
+    return {"script": script}
 
 
 # ---------------------------------------------------------------------------
