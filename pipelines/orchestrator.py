@@ -71,13 +71,34 @@ class Orchestrator:
                 await self.cancel(job)
 
     def read_state(self, pipeline: str) -> dict:
+        # Check if process has crashed
+        job = self._jobs.get(pipeline)
+        if job and job.process and job.status == "running":
+            rc = job.process.poll()
+            if rc is not None:
+                # Process exited — capture stderr
+                stderr = ""
+                try:
+                    stderr = job.process.stderr.read().decode(errors="replace") if job.process.stderr else ""
+                except Exception:
+                    pass
+                job.status = "completed" if rc == 0 else "failed"
+                job.error = stderr[-1000:] if stderr else f"Exit code {rc}"
+
+        # Read state file if it exists
         state_file = self._output_dir / f".{pipeline}-state.json"
-        if not state_file.exists():
-            return {}
-        try:
-            return json.loads(state_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            return {}
+        if state_file.exists():
+            try:
+                return json.loads(state_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # No state file — return job status if we have one
+        if job and job.status in ("failed", "cancelled"):
+            return {"status": job.status, "error": job.error or "Pipeline exited without writing state"}
+        if job and job.status == "running":
+            return {"status": "starting"}
+        return {}
 
     def read_all_states(self) -> dict[str, dict]:
         return {name: self.read_state(name) for name in self._jobs}

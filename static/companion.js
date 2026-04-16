@@ -408,10 +408,10 @@ async function pollStates() {
             const btnCancel = card.querySelector('.btn-cancel');
 
             const phase = state.phase || state.status || '';
-            const pct = state.percent || 0;
-            const msg = state.message || state.detail || '';
+            const pct = state.percent || (state.items_total ? Math.round(100 * (state.items_done || 0) / state.items_total) : 0);
+            const msg = state.message || state.detail || state.error || '';
 
-            if (phase === 'running' || phase === 'downloading' || phase === 'processing') {
+            if (phase === 'running' || phase === 'downloading' || phase === 'processing' || phase === 'starting' || phase === 'discovering' || phase === 'converting' || phase === 'merging' || phase === 'overviews' || phase === 'resolving') {
                 anyRunning = true;
                 if (progressBar) progressBar.classList.remove('hidden');
                 if (progressFill) progressFill.style.width = pct + '%';
