@@ -53,6 +53,9 @@ function switchTab(name) {
         }
     });
 
+    if (name === 'pipelines') {
+        updateBboxSummary();
+    }
     if (name === 'transfer') {
         // Pre-fill host from connect tab
         const connectHost = document.getElementById('pi-host').value;
@@ -267,6 +270,20 @@ function getBbox() {
         return w + ',' + s + ',' + e + ',' + n;
     }
     return null;
+}
+
+function updateBboxSummary() {
+    const summary = document.getElementById('bbox-summary');
+    const value = document.getElementById('bbox-summary-value');
+    const bbox = getBbox();
+    if (bbox) {
+        const parts = bbox.split(',');
+        value.textContent = parts[0] + ', ' + parts[1] + ' \u2192 ' + parts[2] + ', ' + parts[3];
+        summary.classList.remove('warn');
+    } else {
+        value.textContent = 'No bbox set \u2014 go to Connect tab to draw one';
+        summary.classList.add('warn');
+    }
 }
 
 // ---------------------------------------------------------------------------

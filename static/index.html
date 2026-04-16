@@ -79,6 +79,13 @@
     <!-- ============================================================ -->
     <div class="tab-content" id="tab-pipelines">
         <!-- Controls bar -->
+        <!-- Bbox summary -->
+        <div class="bbox-summary" id="bbox-summary">
+            <span class="bbox-summary-label">Coverage Area:</span>
+            <span class="bbox-summary-value" id="bbox-summary-value">No bbox set — go to Connect tab to draw one</span>
+            <button class="btn-secondary btn-sm" onclick="switchTab('connect')">Edit</button>
+        </div>
+
         <div class="controls-bar">
             <div class="control-group">
                 <label for="gdal-threads">GDAL Threads</label>

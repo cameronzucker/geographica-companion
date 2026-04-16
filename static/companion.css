@@ -410,6 +410,48 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     border-radius: 6px;
 }
 
+/* === BBOX SUMMARY === */
+.bbox-summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+}
+
+.bbox-summary.warn {
+    border-color: var(--yellow);
+    background: rgba(249, 226, 175, 0.08);
+}
+
+.bbox-summary-label {
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.bbox-summary-value {
+    color: var(--text);
+    font-size: 13px;
+    font-family: 'SF Mono', 'Consolas', monospace;
+    flex: 1;
+}
+
+.bbox-summary.warn .bbox-summary-value {
+    color: var(--yellow);
+    font-family: inherit;
+}
+
+.btn-sm {
+    padding: 4px 10px;
+    font-size: 11px;
+}
+
 /* === CONTROLS BAR === */
 .controls-bar {
     display: flex;
