@@ -146,66 +146,71 @@ def get_orchestrator() -> Orchestrator:
 # ---------------------------------------------------------------------------
 
 def _build_cli_args(pipeline_name: str, args: dict) -> list[str]:
-    """Build pipeline-specific CLI argument list from request body args dict."""
+    """Build pipeline-specific CLI argument list from request body args dict.
+
+    Uses --key=value syntax for values that may start with '-' (like bbox
+    coordinates with negative longitudes) to avoid argparse misinterpretation
+    on Windows where subprocess list-to-string conversion can be lossy.
+    """
     cli: list[str] = []
 
-    # Common args present in most pipelines
-    bbox = args.get("bbox")
+    # Common args present in most pipelines — strip whitespace from bbox
+    bbox = (args.get("bbox") or "").strip() or None
     output = args.get("output") or str(COMPANION_OUTPUT_DIR / f"{pipeline_name}.mbtiles")
     staging = args.get("staging") or str(COMPANION_OUTPUT_DIR / "staging")
 
     if pipeline_name == "basemap":
         cli += ["--mode", "tnmaccess"]
-        cli += ["--zoom", args.get("zoom", "0-14")]
+        cli += [f"--zoom={args.get('zoom', '0-14')}"]
         if bbox:
-            cli += ["--bbox", bbox]
-        cli += ["--output", output, "--staging", staging]
+            cli += [f"--bbox={bbox}"]
+        cli += [f"--output={output}", f"--staging={staging}"]
 
     elif pipeline_name == "noaa":
         cli += ["--mode", "noaa"]
         if bbox:
-            cli += ["--bbox", bbox]
+            cli += [f"--bbox={bbox}"]
         state = args.get("state")
         if state:
-            cli += ["--state", state]
-        cli += ["--output", output, "--staging", staging]
+            cli += [f"--state={state}"]
+        cli += [f"--output={output}", f"--staging={staging}"]
 
     elif pipeline_name == "m2m":
         cli += ["--mode", "m2m"]
         if bbox:
-            cli += ["--bbox", bbox]
+            cli += [f"--bbox={bbox}"]
         username = args.get("m2m_username") or args.get("m2m-username")
         token = args.get("m2m_token") or args.get("m2m-token")
         if username:
-            cli += ["--m2m-username", username]
+            cli += [f"--m2m-username={username}"]
         if token:
-            cli += ["--m2m-token", token]
-        cli += ["--output", output, "--staging", staging]
+            cli += [f"--m2m-token={token}"]
+        cli += [f"--output={output}", f"--staging={staging}"]
 
     elif pipeline_name == "sentinel":
         if bbox:
-            cli += ["--bbox", bbox]
+            cli += [f"--bbox={bbox}"]
         api_key = args.get("api_key") or args.get("api-key")
         if api_key:
-            cli += ["--api-key", api_key]
-        cli += ["--output", output, "--staging", staging]
+            cli += [f"--api-key={api_key}"]
+        cli += [f"--output={output}", f"--staging={staging}"]
 
     elif pipeline_name == "elevation":
         if bbox:
-            cli += ["--bbox", bbox]
-        cli += ["--zoom", args.get("zoom", "0-14")]
-        cli += ["--output", output, "--staging", staging]
+            cli += [f"--bbox={bbox}"]
+        cli += [f"--zoom={args.get('zoom', '0-14')}"]
+        cli += [f"--output={output}"]
 
     elif pipeline_name == "import":
         source = args.get("source")
         if source:
-            cli += ["--source", source]
-        cli += ["--output", output]
+            cli += [f"--input={source}"]
+        cli += [f"--output={output}"]
 
     else:
-        # Generic fallback: pass all args as --key value pairs
+        # Generic fallback: pass all args as --key=value pairs
         for k, v in args.items():
-            cli += [f"--{k}", str(v)]
+            cli += [f"--{k}={v}"]
 
     return cli
 

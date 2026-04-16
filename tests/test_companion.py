@@ -208,20 +208,24 @@ class TestPipelineStart:
             },
             headers={"X-CSRF-Token": csrf_token},
         )
-        # Should start (200) or return validation error (422), not CSRF (403) or server crash (500)
-        assert resp.status_code in (200, 422, 400)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "started"
+        assert data["pipeline"] == "noaa"
+        assert any("--bbox=" in a for a in data["args"])
 
     @pytest.mark.asyncio
-    async def test_start_unknown_pipeline_returns_error(self, client, csrf_token):
+    async def test_start_unknown_pipeline_returns_400(self, client, csrf_token):
         resp = await client.post(
             "/api/pipelines/start",
             json={"pipeline": "nonexistent", "args": {}},
             headers={"X-CSRF-Token": csrf_token},
         )
-        assert resp.status_code in (400, 404, 422)
+        assert resp.status_code == 400
+        assert "nonexistent" in resp.json()["detail"]
 
     @pytest.mark.asyncio
-    async def test_start_basemap_pipeline_builds_args(self, client, csrf_token, set_output_dir):
+    async def test_start_basemap_pipeline_returns_args(self, client, csrf_token, set_output_dir):
         resp = await client.post(
             "/api/pipelines/start",
             json={
@@ -234,7 +238,11 @@ class TestPipelineStart:
             },
             headers={"X-CSRF-Token": csrf_token},
         )
-        assert resp.status_code in (200, 422, 400)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "started"
+        assert "--mode" in data["args"]
+        assert "--bbox=-112.1,33.4,-111.9,33.6" in data["args"]
 
 
 # ---------------------------------------------------------------------------
