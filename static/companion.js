@@ -8,7 +8,8 @@ let csrfToken = '';
 let outputDir = '';
 let map = null;
 let bboxLayer = null;
-let bboxDrawing = false;
+let bboxDrawMode = false;  // true when "Draw Box" is active
+let bboxDrawing = false;   // true during an active drag
 let bboxStart = null;
 let pollTimer = null;
 let piHost = '';
@@ -182,7 +183,7 @@ function initMap(tileUrl) {
     const canvas = map.getCanvasContainer();
 
     canvas.addEventListener('mousedown', (e) => {
-        if (!e.shiftKey) return;
+        if (!bboxDrawMode) return;
         if (e.button !== 0) return;
         e.preventDefault();
         bboxDrawing = true;
@@ -200,6 +201,10 @@ function initMap(tileUrl) {
         if (!bboxDrawing) return;
         bboxDrawing = false;
         map.dragPan.enable();
+        // Exit draw mode after drawing
+        bboxDrawMode = false;
+        updateDrawBoxButton();
+        canvas.style.cursor = '';
         if (!bboxStart) return;
         const end = map.unproject([e.offsetX, e.offsetY]);
         const west = Math.min(bboxStart.lng, end.lng).toFixed(4);
@@ -215,6 +220,27 @@ function initMap(tileUrl) {
         updateBboxOverlay(west, south, east, north);
         bboxStart = null;
     });
+}
+
+function toggleDrawBox() {
+    bboxDrawMode = !bboxDrawMode;
+    updateDrawBoxButton();
+    if (map) {
+        const canvas = map.getCanvasContainer();
+        canvas.style.cursor = bboxDrawMode ? 'crosshair' : '';
+    }
+}
+
+function updateDrawBoxButton() {
+    const btn = document.getElementById('btn-draw-bbox');
+    if (!btn) return;
+    if (bboxDrawMode) {
+        btn.classList.add('active');
+        btn.textContent = 'Drawing... (drag to set area)';
+    } else {
+        btn.classList.remove('active');
+        btn.textContent = 'Draw Box';
+    }
 }
 
 function updateBboxOverlay(west, south, east, north) {

@@ -410,6 +410,25 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     border-radius: 6px;
 }
 
+/* === BBOX TOOLBAR === */
+.bbox-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.bbox-toolbar .btn-secondary.active {
+    background: var(--blue);
+    color: var(--bg);
+    border-color: var(--blue);
+}
+
+.bbox-hint {
+    color: var(--muted);
+    font-size: 12px;
+}
+
 /* === SECTION DIVIDER === */
 .section-divider {
     border: none;

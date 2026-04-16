@@ -49,7 +49,10 @@
             <div class="panel">
                 <div class="section">
                     <h3>Area of Interest</h3>
-                    <p>Shift + drag on the map to draw a bounding box, or enter coordinates manually.</p>
+                    <div class="bbox-toolbar">
+                        <button class="btn-secondary" id="btn-draw-bbox" onclick="toggleDrawBox()">Draw Box</button>
+                        <span class="bbox-hint">Click "Draw Box" then drag on the map, or enter coordinates below.</span>
+                    </div>
                     <div id="minimap"></div>
 
                     <div class="bbox-fields mt-8">
