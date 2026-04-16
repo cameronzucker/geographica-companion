@@ -28,9 +28,9 @@ async function init() {
         if (outputDirEl) outputDirEl.value = outputDir;
         if (cfg.missing_dependencies && cfg.missing_dependencies.length > 0) {
             log('WARNING: Missing dependencies: ' + cfg.missing_dependencies.join(', '));
-            log('Run: pip install ' + cfg.missing_dependencies.join(' '));
+            log('Run: pip install rasterio numpy shapely pyshp');
         }
-        log('Config loaded. rasterio: ' + (cfg.rasterio_available ? 'v' + (cfg.dependencies.rasterio || '?') : 'NOT INSTALLED — run pip install rasterio'));
+        log('Config loaded. rasterio: ' + (cfg.rasterio_available ? 'v' + (cfg.dependencies.rasterio || '?') : 'NOT INSTALLED -- run: pip install rasterio numpy shapely pyshp'));
     } catch (e) {
         log('Failed to load config: ' + e.message);
     }
