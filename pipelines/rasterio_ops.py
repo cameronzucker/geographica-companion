@@ -565,21 +565,21 @@ def _read_tile_from_array(
     if window_data.size == 0:
         return None
 
-    # Resize to tile_size x tile_size using simple nearest-neighbor
-    bands = window_data.shape[0]
-    tile = np.zeros((bands, tile_size, tile_size), dtype=np.uint8)
+    # Resize to tile_size x tile_size using vectorized nearest-neighbor
+    # Build index arrays once — numpy fancy indexing replaces the Python loop
+    src_rows = np.minimum(
+        (np.arange(tile_size) * (window_data.shape[1] / tile_size)).astype(np.intp),
+        window_data.shape[1] - 1,
+    )
+    src_cols = np.minimum(
+        (np.arange(tile_size) * (window_data.shape[2] / tile_size)).astype(np.intp),
+        window_data.shape[2] - 1,
+    )
 
-    y_ratio = window_data.shape[1] / tile_size
-    x_ratio = window_data.shape[2] / tile_size
+    # Advanced indexing: window_data[:, src_rows][:, :, src_cols] → (bands, tile_size, tile_size)
+    tile = window_data[:, src_rows, :][:, :, src_cols]
 
-    for b in range(bands):
-        for ty in range(tile_size):
-            src_y = min(int(ty * y_ratio), window_data.shape[1] - 1)
-            for tx in range(tile_size):
-                src_x = min(int(tx * x_ratio), window_data.shape[2] - 1)
-                tile[b, ty, tx] = window_data[b, src_y, src_x]
-
-    return tile
+    return tile.astype(np.uint8) if tile.dtype != np.uint8 else tile
 
 
 def _is_empty_tile(data: np.ndarray) -> bool:
