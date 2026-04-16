@@ -1644,24 +1644,42 @@ async def run_noaa(args):
                         0, total_tiles, phase="downloading",
                         geotiffs_downloaded=0, geotiffs_total=total_tiles)
 
-        # Phase 4: Download, reproject, and convert ONE AT A TIME
+        # Phase 4: 3-stage parallel pipeline
+        #
+        # Stage 1 (download):  N concurrent async downloads (network-bound)
+        # Stage 2 (reproject): M concurrent threads via ThreadPoolExecutor (CPU-bound)
+        # Stage 3 (merge):     1 serial writer (SQLite write lock)
+        #
+        # Stages overlap: while tile K is merging, tiles K+1..K+M are
+        # reprojecting, and tiles K+M+1..K+M+N are downloading.
+        #
+        # Auto-detect worker counts from hardware:
+        #   - Download concurrency: 4 (network bound, more doesn't help)
+        #   - Reproject workers: min(cpu_count, 6) — each uses ~2 GDAL threads
+        #     internally, so 6 workers × 2 = 12 threads on a 16-thread CPU
+        import concurrent.futures
+
+        cpu_count = os.cpu_count() or 4
+        DOWNLOAD_CONCURRENCY = min(4, total_tiles)
+        REPROJECT_WORKERS = min(cpu_count, 6, total_tiles)
+
         tiles_done = 0
         tiles_failed = 0
+        tiles_reprojected = 0
 
         from pipeline_security import validate_file_header
 
-        # Concurrent pipeline: up to DOWNLOAD_CONCURRENCY tiles downloading
-        # simultaneously, feeding a processing queue. GDAL processing runs
-        # in a thread pool (one at a time — MBTiles merge is not thread-safe).
-        # Pi 5 has 4 cores and 8+ GB free RAM; 3 concurrent downloads keep
-        # the network saturated while CPU stays busy with reproject+convert.
-        DOWNLOAD_CONCURRENCY = 3  # tiles downloading simultaneously
         download_sem = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
-        process_queue = asyncio.Queue(maxsize=DOWNLOAD_CONCURRENCY)
+        reproject_queue = asyncio.Queue(maxsize=DOWNLOAD_CONCURRENCY + REPROJECT_WORKERS)
+        merge_queue = asyncio.Queue(maxsize=REPROJECT_WORKERS)
         loop = asyncio.get_event_loop()
+        reproject_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=REPROJECT_WORKERS,
+            thread_name_prefix="reproject",
+        )
 
         async def _download_tile(tile_fname):
-            """Download and validate a single tile. Returns (fname, path) or (fname, None)."""
+            """Download and validate a single tile."""
             url = f"{blob_base}/{tile_fname}"
             dest = staging / tile_fname
             async with download_sem:
@@ -1678,8 +1696,8 @@ async def run_noaa(args):
                 return (tile_fname, None)
             return (tile_fname, dest)
 
-        def _process_tile(raw_path, tile_fname, idx):
-            """Reproject + convert a downloaded tile. Returns True on success."""
+        def _reproject_tile(raw_path, tile_fname):
+            """Reproject a single tile to EPSG:3857. Runs in thread pool."""
             warped_path = staging / f"warped_{tile_fname}"
             try:
                 success = rio_reproject_to_mercator(
@@ -1690,54 +1708,53 @@ async def run_noaa(args):
                     log.error("Reproject failed for %s", tile_fname)
                     raw_path.unlink(missing_ok=True)
                     warped_path.unlink(missing_ok=True)
-                    return False
+                    return None
             except Exception as exc:
                 log.error("Reproject failed for %s: %s", tile_fname, exc)
                 raw_path.unlink(missing_ok=True)
                 warped_path.unlink(missing_ok=True)
-                return False
-
+                return None
             raw_path.unlink(missing_ok=True)
+            return warped_path
 
-            # MBTiles merge is not thread-safe — must be serialized
+        def _merge_tile(warped_path, idx):
+            """Merge a reprojected tile into the output MBTiles. Runs serially."""
             ok = convert_batch_to_mbtiles([warped_path], output, f"noaa_tile_{idx}")
             warped_path.unlink(missing_ok=True)
             return ok
 
-        async def _producer():
-            """Download tiles concurrently and feed into the process queue."""
+        async def _downloader():
+            """Stage 1: download tiles concurrently, feed reproject queue."""
             download_tasks = []
             for idx, fname in enumerate(tile_filenames):
                 if _cancel_requested:
                     break
-                log.info("[%d/%d] Downloading %s (~%d MB)",
+                log.info("[%d/%d] Queuing download: %s (~%d MB)",
                          idx + 1, total_tiles, fname, NOAA_TILE_SIZE_MB)
                 task = asyncio.ensure_future(_download_tile(fname))
                 download_tasks.append((idx, fname, task))
 
-                # When we have DOWNLOAD_CONCURRENCY tasks in flight, wait for
-                # the oldest to finish and push it to the process queue
                 if len(download_tasks) >= DOWNLOAD_CONCURRENCY:
                     oldest_idx, oldest_fname, oldest_task = download_tasks.pop(0)
                     dl_fname, dl_path = await oldest_task
-                    await process_queue.put((oldest_idx, dl_fname, dl_path))
+                    await reproject_queue.put((oldest_idx, dl_fname, dl_path))
 
-            # Drain remaining downloads
             for idx, fname, task in download_tasks:
                 if _cancel_requested:
                     task.cancel()
                     continue
                 dl_fname, dl_path = await task
-                await process_queue.put((idx, dl_fname, dl_path))
+                await reproject_queue.put((idx, dl_fname, dl_path))
 
-            # Signal end of downloads
-            await process_queue.put(None)
+            await reproject_queue.put(None)
 
-        async def _consumer():
-            """Process downloaded tiles sequentially (MBTiles merge not thread-safe)."""
-            nonlocal tiles_done, tiles_failed
+        async def _reprojector():
+            """Stage 2: reproject tiles in parallel thread pool, feed merge queue."""
+            nonlocal tiles_reprojected
+            pending_futures = []
+
             while True:
-                item = await process_queue.get()
+                item = await reproject_queue.get()
                 if item is None:
                     break
                 idx, tile_fname, raw_path = item
@@ -1746,43 +1763,93 @@ async def run_noaa(args):
                     if raw_path:
                         raw_path.unlink(missing_ok=True)
                     if raw_path is None:
+                        await merge_queue.put((idx, tile_fname, None))
+                    continue
+
+                log.info("[%d/%d] Reprojecting %s (%d workers)",
+                         idx + 1, total_tiles, tile_fname, REPROJECT_WORKERS)
+                update_progress(output, "noaa", args.bbox, "n/a",
+                                tiles_done, total_tiles, phase="reprojecting",
+                                geotiffs_downloaded=tiles_reprojected,
+                                geotiffs_total=total_tiles)
+
+                future = loop.run_in_executor(
+                    reproject_pool, _reproject_tile, raw_path, tile_fname
+                )
+                pending_futures.append((idx, tile_fname, future))
+
+                # Drain completed futures to keep memory bounded
+                still_pending = []
+                for f_idx, f_fname, f_future in pending_futures:
+                    if f_future.done():
+                        warped = f_future.result()
+                        tiles_reprojected += 1
+                        await merge_queue.put((f_idx, f_fname, warped))
+                    else:
+                        still_pending.append((f_idx, f_fname, f_future))
+                pending_futures = still_pending
+
+            # Drain remaining futures
+            for f_idx, f_fname, f_future in pending_futures:
+                warped = await f_future
+                tiles_reprojected += 1
+                await merge_queue.put((f_idx, f_fname, warped))
+
+            await merge_queue.put(None)
+
+        async def _merger():
+            """Stage 3: merge reprojected tiles into MBTiles (serialized)."""
+            nonlocal tiles_done, tiles_failed
+            while True:
+                item = await merge_queue.get()
+                if item is None:
+                    break
+                idx, tile_fname, warped_path = item
+
+                if _cancel_requested or warped_path is None:
+                    if warped_path:
+                        warped_path.unlink(missing_ok=True)
+                    if warped_path is None:
                         tiles_failed += 1
                     continue
 
-                log.info("[%d/%d] Reprojecting + converting %s",
+                log.info("[%d/%d] Merging %s into MBTiles",
                          idx + 1, total_tiles, tile_fname)
                 update_progress(output, "noaa", args.bbox, "n/a",
-                                tiles_done, total_tiles, phase="converting",
+                                tiles_done, total_tiles, phase="merging",
                                 geotiffs_downloaded=tiles_done,
                                 geotiffs_total=total_tiles)
 
-                convert_ok = await loop.run_in_executor(
-                    None, _process_tile, raw_path, tile_fname, idx
+                merge_ok = await loop.run_in_executor(
+                    None, _merge_tile, warped_path, idx
                 )
 
-                if convert_ok:
+                if merge_ok:
                     tiles_done += 1
                     log.info("[%d/%d] Tile %s done (%d/%d complete)",
                              idx + 1, total_tiles, tile_fname,
                              tiles_done, total_tiles)
                     update_progress(output, "noaa", args.bbox, "n/a",
-                                    tiles_done, total_tiles, phase="downloading",
+                                    tiles_done, total_tiles, phase="processing",
                                     geotiffs_downloaded=tiles_done,
                                     geotiffs_total=total_tiles)
                 else:
                     tiles_failed += 1
                     if _cancel_requested:
                         break
-                    log.warning("[%d/%d] Conversion failed for %s",
+                    log.warning("[%d/%d] Merge failed for %s",
                                 idx + 1, total_tiles, tile_fname)
 
-        # Run producer and consumer concurrently
+        # Run all 3 stages concurrently
         update_progress(output, "noaa", args.bbox, "n/a",
                         0, total_tiles, phase="downloading",
                         geotiffs_downloaded=0, geotiffs_total=total_tiles)
-        log.info("Starting concurrent pipeline: %d downloads, sequential processing",
-                 DOWNLOAD_CONCURRENCY)
-        await asyncio.gather(_producer(), _consumer())
+        log.info("Starting 3-stage pipeline: %d downloaders, %d reproject workers, 1 merger (CPUs: %d)",
+                 DOWNLOAD_CONCURRENCY, REPROJECT_WORKERS, cpu_count)
+        try:
+            await asyncio.gather(_downloader(), _reprojector(), _merger())
+        finally:
+            reproject_pool.shutdown(wait=False)
 
         if _cancel_requested:
             update_progress(output, "noaa", args.bbox, "n/a",
