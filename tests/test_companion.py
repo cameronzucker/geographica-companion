@@ -268,7 +268,7 @@ class TestPipelineStart:
                 headers={"X-CSRF-Token": csrf_token},
             )
         assert resp.status_code == 400
-        assert "GDAL" in resp.json()["detail"]
+        assert "rasterio" in resp.json()["detail"].lower()
 
 
 # ---------------------------------------------------------------------------

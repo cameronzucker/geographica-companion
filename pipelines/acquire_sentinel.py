@@ -17,7 +17,6 @@ import logging
 import os
 import shutil
 import signal
-import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -26,6 +25,7 @@ from pathlib import Path
 import aiohttp
 from pipeline_progress import update_progress as _generic_progress
 from pipeline_security import safe_staging_path, sanitize_scene_id, validate_file_header
+from rasterio_ops import merge_to_mbtiles, build_overviews
 
 # ---------------------------------------------------------------------------
 # Secrets
@@ -423,37 +423,14 @@ async def download_scene(session: aiohttp.ClientSession, scene: dict,
 # GDAL composite + convert
 # ---------------------------------------------------------------------------
 def run_gdal_composite(tif_files: list, output_path: Path, staging: Path):
-    """Build VRT, translate to MBTiles, add overviews."""
-    env = {
-        **os.environ,
-        "GDAL_CACHEMAX": "256",
-        "GDAL_NUM_THREADS": "2",
-    }
+    """Merge rasters to MBTiles and add overviews using rasterio."""
+    log.info("Merging %d files to MBTiles", len(tif_files))
+    if not merge_to_mbtiles(tif_files, output_path, tile_format="jpeg", quality=85):
+        raise RuntimeError("Failed to merge rasters to MBTiles")
 
-    vrt_path = staging / "composite.vrt"
-
-    # Build VRT
-    cmd_vrt = ["gdalbuildvrt", str(vrt_path)] + [str(f) for f in tif_files]
-    log.info("Building VRT from %d files", len(tif_files))
-    subprocess.run(cmd_vrt, env=env, check=True, capture_output=True)
-
-    # Translate to MBTiles
-    cmd_translate = [
-        "gdal_translate", "-of", "MBTiles",
-        "-co", "TILE_FORMAT=JPEG",
-        "-co", "QUALITY=85",
-        str(vrt_path), str(output_path),
-    ]
-    log.info("Converting VRT to MBTiles")
-    subprocess.run(cmd_translate, env=env, check=True, capture_output=True)
-
-    # Add overviews
-    cmd_addo = [
-        "gdaladdo", "-r", "average", str(output_path),
-        "2", "4", "8", "16",
-    ]
     log.info("Adding overview pyramids")
-    subprocess.run(cmd_addo, env=env, check=True, capture_output=True)
+    if not build_overviews(output_path):
+        raise RuntimeError("Failed to build overviews")
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +575,7 @@ async def run_pipeline(args):
     update_progress(output, "converting", detail="converting to MBTiles", bbox=args.bbox)
     try:
         run_gdal_composite(downloaded_files, output, staging)
-    except subprocess.CalledProcessError as exc:
+    except RuntimeError as exc:
         log.error("GDAL processing failed: %s", exc)
         update_progress(output, "converting", status="error",
                         error=f"GDAL error: {exc}", bbox=args.bbox)

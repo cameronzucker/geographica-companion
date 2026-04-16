@@ -22,7 +22,6 @@ import os
 import signal
 import sqlite3
 import struct
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -31,6 +30,12 @@ import aiohttp
 import aiosqlite
 from tqdm import tqdm
 from pipeline_progress import update_progress as _generic_progress
+from rasterio_ops import (
+    filter_tiles_by_bbox as rio_filter_tiles_by_bbox,
+    merge_to_mbtiles as rio_merge_to_mbtiles,
+    build_overviews as rio_build_overviews,
+    reproject_to_mercator as rio_reproject_to_mercator,
+)
 
 # ---------------------------------------------------------------------------
 # Secrets
@@ -96,34 +101,12 @@ def filter_tiles_by_bbox(
     shapefile_path: Path,
     west: float, south: float, east: float, north: float,
 ) -> list[str]:
-    """Use ogr2ogr to spatially filter a tile index shapefile.
+    """Spatially filter a tile index shapefile by bounding box.
 
     Returns list of GeoTIFF filenames whose footprints intersect the bbox.
+    Delegates to rasterio_ops.filter_tiles_by_bbox (no GDAL CLI dependency).
     """
-    result = subprocess.run(
-        [
-            "ogr2ogr", "-f", "CSV", "/vsistdout/",
-            str(shapefile_path),
-            "-spat", str(west), str(south), str(east), str(north),
-            "-select", "filename",
-        ],
-        capture_output=True, text=True, timeout=60,
-    )
-    if result.returncode != 0:
-        log.error("ogr2ogr spatial filter failed: %s", result.stderr)
-        return []
-
-    lines = result.stdout.strip().split("\n")
-    if len(lines) <= 1:
-        return []
-
-    # With -select filename, output is: "filename\nfile1.tif\nfile2.tif\n..."
-    filenames = []
-    for line in lines[1:]:
-        fname = line.strip().strip('"')
-        if fname.endswith(".tif"):
-            filenames.append(fname)
-    return filenames
+    return rio_filter_tiles_by_bbox(shapefile_path, west, south, east, north)
 
 
 def nationalmap_tile_url(z: int, x: int, y: int) -> str:
@@ -526,39 +509,23 @@ async def download_geotiffs(urls: list[str], staging: Path, checkpoint_path: Pat
 
 
 def convert_geotiffs_to_mbtiles(tif_paths: list[Path], output: Path):
-    """Merge GeoTIFFs and convert to MBTiles via GDAL CLI."""
+    """Merge GeoTIFFs and convert to MBTiles.
+
+    Delegates to rasterio_ops (no GDAL CLI dependency).
+    """
     if not tif_paths:
         log.error("No GeoTIFF files to convert")
         return
 
-    workdir = tif_paths[0].parent
-    vrt_path = workdir / "mosaic.vrt"
-
-    # Build VRT
-    log.info("Building VRT from %d files", len(tif_paths))
-    subprocess.run(
-        ["gdalbuildvrt", str(vrt_path)] + [str(p) for p in tif_paths],
-        check=True,
-    )
-
-    # Convert to MBTiles
-    log.info("Converting VRT to MBTiles: %s", output)
+    log.info("Merging %d GeoTIFFs to MBTiles: %s", len(tif_paths), output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            "gdal_translate", "-of", "MBTiles",
-            "-co", "TILE_FORMAT=JPEG",
-            str(vrt_path), str(output),
-        ],
-        check=True,
-    )
+    success = rio_merge_to_mbtiles(tif_paths, output)
+    if not success:
+        log.error("merge_to_mbtiles failed for %s", output)
+        return
 
-    # Build overview pyramids
     log.info("Building overview pyramids")
-    subprocess.run(
-        ["gdaladdo", "-r", "average", str(output), "2", "4", "8", "16"],
-        check=True,
-    )
+    rio_build_overviews(output)
     log.info("MBTiles written to %s", output)
 
 
@@ -591,64 +558,18 @@ def merge_mbtiles(src_path: Path, dst_path: Path) -> None:
         dst.close()
 
 
-def run_gdal_subprocess(cmd: list[str], timeout: int = 7200,
-                        cancel_check=None) -> subprocess.CompletedProcess:
-    """Run a GDAL CLI command with nice priority and optional cancel check.
-
-    Uses Popen with a process group so SIGTERM can kill the child
-    immediately (without waiting for it to finish).
-
-    Args:
-        cmd: Command and arguments (e.g., ["gdalbuildvrt", ...])
-        timeout: Max seconds before killing the process.
-        cancel_check: Optional callable returning True if cancellation requested.
-
-    Returns:
-        CompletedProcess on success.
-
-    Raises:
-        subprocess.CalledProcessError: If command fails or is cancelled.
-        subprocess.TimeoutExpired: If timeout exceeded.
-    """
-    if cancel_check and cancel_check():
-        raise subprocess.CalledProcessError(1, cmd, stderr="Cancelled before start")
-    full_cmd = cmd
-    gdal_env = {
-        **os.environ,
-        "GDAL_CACHEMAX": os.environ.get("GDAL_CACHEMAX", "1024"),
-        "GDAL_NUM_THREADS": os.environ.get("GDAL_NUM_THREADS", "ALL_CPUS"),
-    }
-    proc = subprocess.Popen(
-        full_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, env=gdal_env,
-    )
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
-        raise
-    if proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, full_cmd,
-                                            output=stdout, stderr=stderr)
-    return subprocess.CompletedProcess(full_cmd, proc.returncode, stdout, stderr)
-
 
 def _run_gdaladdo_with_metadata_fixup(output: Path) -> None:
-    """Run gdaladdo on MBTiles output, then fix metadata to match actual tiles.
+    """Build overview pyramids on MBTiles output, then fix metadata.
 
-    Uses run_gdal_subprocess() for cancel support (not subprocess.run).
-    After gdaladdo adds overview tiles at lower zoom levels, updates the
-    metadata table so TileServer reports correct minzoom/maxzoom in TileJSON.
+    Delegates to rasterio_ops.build_overviews which already updates
+    minzoom/maxzoom metadata. The post-fixup SQL ensures consistency
+    even if build_overviews is interrupted.
     """
     if _cancel_requested:
         return
 
-    run_gdal_subprocess(
-        ["gdaladdo", "-r", "average", str(output), "2", "4", "8", "16"],
-        timeout=14400,  # 4 hours — full MBTiles overview can take 2+ hours
-        cancel_check=lambda: _cancel_requested,
-    )
+    rio_build_overviews(output, cancel_check=lambda: _cancel_requested)
 
     # Cancel guard: don't fixup metadata on partial overviews
     if _cancel_requested:
@@ -690,25 +611,15 @@ def convert_batch_to_mbtiles(tif_paths: list[Path], output: Path,
     temp_mbtiles = workdir / f"{batch_label}.mbtiles"
 
     try:
-        # Build VRT from this batch
-        log.info("%s: building VRT from %d files", batch_label, len(tif_paths))
-        run_gdal_subprocess(
-            ["gdalbuildvrt", str(vrt_path)] + [str(p) for p in tif_paths],
-            timeout=600,
+        # Merge GeoTIFFs to temp MBTiles via rasterio
+        log.info("%s: merging %d GeoTIFFs to temp MBTiles", batch_label, len(tif_paths))
+        success = rio_merge_to_mbtiles(
+            tif_paths, temp_mbtiles,
             cancel_check=lambda: _cancel_requested,
         )
-
-        # Convert VRT to temp MBTiles
-        log.info("%s: converting VRT to temp MBTiles", batch_label)
-        run_gdal_subprocess(
-            [
-                "gdal_translate", "-of", "MBTiles",
-                "-co", "TILE_FORMAT=JPEG",
-                str(vrt_path), str(temp_mbtiles),
-            ],
-            timeout=7200,
-            cancel_check=lambda: _cancel_requested,
-        )
+        if not success:
+            log.error("%s: merge_to_mbtiles failed", batch_label)
+            return False
 
         # Merge temp MBTiles into the main output
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -717,12 +628,8 @@ def convert_batch_to_mbtiles(tif_paths: list[Path], output: Path,
 
         return True
 
-    except subprocess.CalledProcessError as exc:
-        log.error("%s: GDAL conversion failed: %s", batch_label,
-                  exc.stderr if hasattr(exc, 'stderr') and exc.stderr else str(exc))
-        return False
-    except subprocess.TimeoutExpired:
-        log.error("%s: GDAL conversion timed out", batch_label)
+    except Exception as exc:
+        log.error("%s: conversion failed: %s", batch_label, exc)
         return False
     finally:
         # Cleanup temp files
@@ -1514,12 +1421,8 @@ async def run_m2m(args):
                         scenes_total=len(scenes),
                         geotiffs_downloaded=len(tif_paths), geotiffs_total=len(scenes))
         try:
-            run_gdal_subprocess(
-                ["gdaladdo", "-r", "average", str(output), "2", "4", "8", "16"],
-                timeout=3600,
-                cancel_check=lambda: _cancel_requested,
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            rio_build_overviews(output, cancel_check=lambda: _cancel_requested)
+        except Exception as exc:
             log.warning("Overview generation failed: %s -- output is still usable", exc)
 
     update_progress(output, "m2m", args.bbox, "n/a",
@@ -1534,13 +1437,6 @@ async def run_m2m(args):
 # ===================================================================
 
 NOAA_MAX_GEOTIFF_SIZE = 600 * 1024 * 1024  # 600 MB safety limit per tile
-
-# GDAL environment for memory-safe operation on Pi 5
-_NOAA_GDAL_ENV = {
-    **os.environ,
-    "GDAL_CACHEMAX": "1024",
-    "GDAL_NUM_THREADS": "ALL_CPUS",
-}
 
 
 async def _noaa_fetch_tile_index(
@@ -1786,15 +1682,17 @@ async def run_noaa(args):
             """Reproject + convert a downloaded tile. Returns True on success."""
             warped_path = staging / f"warped_{tile_fname}"
             try:
-                run_gdal_subprocess(
-                    ["gdalwarp", "-t_srs", "EPSG:3857", "-r", "lanczos",
-                     "-co", "TILED=YES", "-co", "COMPRESS=DEFLATE",
-                     str(raw_path), str(warped_path)],
-                    timeout=3600,
+                success = rio_reproject_to_mercator(
+                    raw_path, warped_path,
                     cancel_check=lambda: _cancel_requested,
                 )
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-                log.error("gdalwarp failed for %s: %s", tile_fname, exc)
+                if not success:
+                    log.error("Reproject failed for %s", tile_fname)
+                    raw_path.unlink(missing_ok=True)
+                    warped_path.unlink(missing_ok=True)
+                    return False
+            except Exception as exc:
+                log.error("Reproject failed for %s: %s", tile_fname, exc)
                 raw_path.unlink(missing_ok=True)
                 warped_path.unlink(missing_ok=True)
                 return False
@@ -1903,7 +1801,7 @@ async def run_noaa(args):
                         geotiffs_total=total_tiles)
         try:
             _run_gdaladdo_with_metadata_fixup(output)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        except Exception as exc:
             log.warning("Overview generation failed: %s — output is still usable", exc)
 
     # Phase 6: Update TileServer config if path is provided via env

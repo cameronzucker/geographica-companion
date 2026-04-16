@@ -19,7 +19,6 @@ import logging
 import os
 import shutil
 import signal
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -27,6 +26,12 @@ from pathlib import Path
 import aiohttp
 
 from build_county_index import counties_for_bbox
+from rasterio_ops import (
+    check_jp2_support,
+    translate_format,
+    merge_to_mbtiles as rio_merge,
+    build_overviews,
+)
 from pipeline_progress import update_progress as _generic_progress
 from pipeline_security import safe_staging_path, sanitize_fips, validate_file_header
 
@@ -48,13 +53,6 @@ MAX_RETRIES = 3
 RETRY_BACKOFF = 2  # seconds, doubled each attempt
 MIN_FREE_SPACE_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
 MAX_JP2_SIZE_BYTES = 30 * 1024 * 1024 * 1024  # 30 GB
-
-# GDAL environment for memory-safe operation on Pi 5
-GDAL_ENV = {
-    **os.environ,
-    "GDAL_CACHEMAX": "1024",
-    "GDAL_NUM_THREADS": "ALL_CPUS",
-}
 
 # ---------------------------------------------------------------------------
 # Cancellation
@@ -103,15 +101,8 @@ def parse_bbox(s: str) -> tuple[float, float, float, float]:
 
 
 def check_gdal_jp2_support() -> bool:
-    """Check that GDAL has JP2OpenJPEG driver available."""
-    try:
-        result = subprocess.run(
-            ["gdalinfo", "--formats"],
-            capture_output=True, text=True, timeout=30,
-        )
-        return "JP2OpenJPEG" in result.stdout
-    except (subprocess.SubprocessError, FileNotFoundError):
-        return False
+    """Check that rasterio/GDAL supports JP2OpenJPEG format."""
+    return check_jp2_support()
 
 
 def check_disk_space(path: Path, min_bytes: int = MIN_FREE_SPACE_BYTES) -> None:
@@ -407,34 +398,21 @@ def convert_jp2_to_geotiff(jp2_path: Path, staging_dir: Path, fips: str) -> Path
         log.info("Using existing GeoTIFF: %s", tif_path)
         return tif_path
 
-    cmd = [
-        "gdal_translate", "-of", "GTiff",
-        "-co", "TILED=YES",
-        "-co", "COMPRESS=DEFLATE",
-        str(jp2_path), str(tif_path),
-    ]
+    success = translate_format(
+        jp2_path, tif_path,
+        output_format="GTiff",
+        creation_options={"tiled": True, "compress": "deflate"},
+    )
 
-    try:
-        subprocess.run(
-            cmd, check=True, capture_output=True, text=True,
-            env=GDAL_ENV, timeout=3600,
-        )
-    except subprocess.CalledProcessError as exc:
-        log.error("GDAL translate failed for %s: %s", jp2_path, exc.stderr)
-        if tif_path.exists():
-            tif_path.unlink()
-        return None
-    except subprocess.TimeoutExpired:
-        log.error("GDAL translate timed out for %s", jp2_path)
-        if tif_path.exists():
-            tif_path.unlink()
+    if not success:
+        log.error("Format translation failed for %s", jp2_path)
         return None
 
     return tif_path
 
 
 def merge_to_mbtiles(geotiff_paths: list[Path], output_path: Path) -> bool:
-    """Build VRT from all GeoTIFFs, then convert to MBTiles."""
+    """Merge all GeoTIFFs into MBTiles with overview pyramids."""
     if not geotiff_paths:
         log.error("No GeoTIFFs to merge")
         return False
@@ -442,45 +420,14 @@ def merge_to_mbtiles(geotiff_paths: list[Path], output_path: Path) -> bool:
     vrt_path = output_path.parent / "naip_merge.vrt"
     tif_list_path = output_path.parent / "naip_tifs.txt"
 
-    # Write file list for gdalbuildvrt
-    tif_list_path.write_text("\n".join(str(p) for p in geotiff_paths))
-
     try:
-        # Build VRT
-        subprocess.run(
-            ["gdalbuildvrt",
-             "-input_file_list", str(tif_list_path),
-             str(vrt_path)],
-            check=True, capture_output=True, text=True,
-            env=GDAL_ENV, timeout=600,
-        )
-
-        # Convert VRT to MBTiles
-        subprocess.run(
-            ["gdal_translate",
-             "-of", "MBTiles",
-             "-co", "TILE_FORMAT=JPEG",
-             "-co", "QUALITY=85",
-             str(vrt_path), str(output_path)],
-            check=True, capture_output=True, text=True,
-            env=GDAL_ENV, timeout=7200,
-        )
-
-        # Build overview pyramids
-        subprocess.run(
-            ["gdaladdo",
-             "-r", "average",
-             str(output_path),
-             "2", "4", "8", "16"],
-            check=True, capture_output=True, text=True,
-            env=GDAL_ENV, timeout=3600,
-        )
-
+        if not rio_merge(geotiff_paths, output_path, tile_format="jpeg", quality=85):
+            log.error("MBTiles merge failed")
+            return False
+        if not build_overviews(output_path):
+            log.error("MBTiles overview build failed")
+            return False
         return True
-
-    except subprocess.CalledProcessError as exc:
-        log.error("MBTiles merge failed: %s", exc.stderr)
-        return False
     finally:
         # Cleanup temp files
         if vrt_path.exists():

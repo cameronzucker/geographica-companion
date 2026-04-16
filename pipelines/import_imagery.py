@@ -11,12 +11,11 @@ Usage:
 
 import argparse
 import logging
-import os
-import subprocess
 import sys
 from pathlib import Path
 
 from pipeline_security import sanitize_layer_name
+from rasterio_ops import reproject_to_mercator
 from pipeline_progress import update_progress as _generic_progress
 try:
     from tileserver_config import add_mbtiles_to_config  # optional — only available on Pi
@@ -35,7 +34,6 @@ log = logging.getLogger(__name__)
 from acquire_imagery import convert_batch_to_mbtiles
 
 BATCH_SIZE = 5
-GDAL_ENV = {**os.environ, "GDAL_CACHEMAX": "512"}
 
 OTHER_GEO_EXTENSIONS = {".jp2", ".sid", ".img", ".ecw", ".vrt"}
 
@@ -92,24 +90,7 @@ def resolve_output_path(output_dir: Path, layer_name: str | None) -> Path:
 
 def reproject_geotiff(src: Path, dst: Path) -> bool:
     """Reproject a GeoTIFF to EPSG:3857 (Web Mercator). Returns True on success."""
-    try:
-        subprocess.run(
-            [
-                "gdalwarp", "-t_srs", "EPSG:3857",
-                "-r", "lanczos",
-                "-co", "TILED=YES",
-                "-co", "COMPRESS=DEFLATE",
-                str(src), str(dst),
-            ],
-            check=True, capture_output=True, text=True,
-            timeout=3600, env=GDAL_ENV,
-        )
-        return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        log.error("gdalwarp failed for %s: %s", src.name, exc)
-        if dst.exists():
-            dst.unlink()
-        return False
+    return reproject_to_mercator(src, dst, resampling="lanczos", compress="deflate")
 
 
 def run_import(

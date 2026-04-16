@@ -234,7 +234,7 @@ class StartRequest(BaseModel):
 @app.get("/api/config")
 async def get_config():
     gdal_bin_dir = gdal_env.detect_gdal()
-    gdal_available = gdal_bin_dir is not None or shutil.which("gdalwarp") is not None
+    gdal_available = gdal_bin_dir is not None
     return {
         "output_dir": str(COMPANION_OUTPUT_DIR),
         "csrf_token": CSRF_TOKEN,
@@ -289,16 +289,15 @@ async def start_pipeline(request: StartRequest):
     if pipeline_name not in _PIPELINE_DEF_MAP:
         raise HTTPException(status_code=400, detail=f"Unknown pipeline: {pipeline_name!r}")
 
-    # Check GDAL availability before wasting time
+    # Check GDAL/rasterio availability before wasting time
     if pipeline_name in _PIPELINES_REQUIRING_GDAL:
         gdal_bin_dir = gdal_env.detect_gdal()
-        if gdal_bin_dir is None and shutil.which("gdalwarp") is None:
+        if gdal_bin_dir is None:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "GDAL is required but not found. "
-                    "Install OSGeo4W (https://trac.osgeo.org/osgeo4w/) or "
-                    "set GDAL_BIN_DIR to your GDAL bin directory."
+                    "rasterio is required but not installed. "
+                    "Run: pip install rasterio fiona numpy"
                 ),
             )
 

@@ -1,4 +1,9 @@
-"""GDAL binary detection and environment setup for the companion utility."""
+"""GDAL detection and environment setup for the companion utility.
+
+With the rasterio refactor, GDAL CLI tools are no longer required.
+Rasterio bundles GDAL as a shared library inside its pip wheel.
+This module now primarily checks that rasterio is importable.
+"""
 
 import os
 import platform
@@ -9,14 +14,23 @@ COMPANION_DIR = Path(__file__).parent
 
 
 def detect_gdal() -> Path | None:
-    """Detect GDAL binaries. Returns bin directory path, or None for system PATH.
+    """Detect GDAL availability.
 
     Resolution order:
-    1. GDAL_BIN_DIR env var (user override)
-    2. Bundled bin/{platform}/ directory
-    3. System PATH (returns None)
-    4. None with no system gdalwarp found
+    1. rasterio importable (GDAL bundled inside the pip wheel — preferred)
+    2. GDAL_BIN_DIR env var (user override, for CLI tool fallback)
+    3. Bundled bin/{platform}/ directory
+    4. System PATH gdalwarp
+    5. None (not found)
     """
+    # rasterio bundles GDAL — this is the primary path now
+    try:
+        import rasterio  # noqa: F401
+        return Path("rasterio-bundled")  # sentinel value indicating rasterio provides GDAL
+    except ImportError:
+        pass
+
+    # Legacy fallback: system GDAL CLI tools
     env_dir = os.environ.get("GDAL_BIN_DIR")
     if env_dir:
         return Path(env_dir)
@@ -41,10 +55,14 @@ def detect_gdal() -> Path | None:
 
 
 def get_gdal_env(gdal_bin_dir: Path | None, gdal_threads: int = 0) -> dict:
-    """Build environment dict for GDAL subprocess execution."""
+    """Build environment dict for subprocess execution.
+
+    With rasterio handling GDAL operations in-process, this is mostly
+    used for setting thread/cache hints that rasterio respects via env vars.
+    """
     env = os.environ.copy()
 
-    if gdal_bin_dir:
+    if gdal_bin_dir and str(gdal_bin_dir) != "rasterio-bundled":
         sep = ";" if platform.system() == "Windows" else ":"
         env["PATH"] = str(gdal_bin_dir) + sep + env.get("PATH", "")
         share_proj = gdal_bin_dir / "share" / "proj"
