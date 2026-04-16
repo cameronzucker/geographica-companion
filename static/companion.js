@@ -457,7 +457,7 @@ async function pollStates() {
             const pct = state.percent || (state.items_total ? Math.round(100 * (state.items_done || 0) / state.items_total) : 0);
             const msg = state.message || state.detail || state.error || '';
 
-            if (phase === 'running' || phase === 'downloading' || phase === 'processing' || phase === 'starting' || phase === 'discovering' || phase === 'converting' || phase === 'merging' || phase === 'overviews' || phase === 'resolving') {
+            if (phase === 'running' || phase === 'downloading' || phase === 'processing' || phase === 'starting' || phase === 'discovering' || phase === 'converting' || phase === 'merging' || phase === 'overviews' || phase === 'resolving' || phase === 'reprojecting' || phase === 'indexing' || phase === 'validating') {
                 anyRunning = true;
                 if (progressBar) progressBar.classList.remove('hidden');
                 if (progressFill) progressFill.style.width = pct + '%';
