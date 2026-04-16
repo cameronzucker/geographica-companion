@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -62,7 +63,7 @@ def detect_transfer_method(auth_type: str, rsync_available: bool) -> str:
       - password auth (any)         -> "sftp"  (rsync needs TTY for password)
       - key auth  + no rsync        -> "sftp"
     """
-    if auth_type == "key" and rsync_available:
+    if auth_type == "key" and rsync_available and shutil.which("rsync"):
         return "rsync"
     return "sftp"
 
@@ -233,10 +234,12 @@ async def transfer_file_sftp(
     remote_dir: str,
     password: Optional[str],
     progress_callback: Optional[Callable[[float, int], None]],
+    key_path: Optional[str] = None,
 ) -> bool:
     """Transfer a single file via SFTP using paramiko.
 
-    Safe for headless use -- no TTY required.
+    Safe for headless use -- no TTY required. Supports both password and
+    key-based auth so key auth can fall back to SFTP when rsync isn't available.
 
     Args:
         local_path:        Path to local file.
@@ -245,6 +248,7 @@ async def transfer_file_sftp(
         remote_dir:        Destination directory on the remote host.
         password:          SSH password.
         progress_callback: Called with (percent: float, transferred_bytes: int).
+        key_path:          Path to SSH private key (optional fallback for key auth).
 
     Returns:
         True on success, False on failure.
@@ -254,7 +258,12 @@ async def transfer_file_sftp(
 
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(remote_host, username=remote_user, password=password, timeout=15)
+        connect_kwargs: dict = {"username": remote_user, "timeout": 15}
+        if key_path:
+            connect_kwargs["key_filename"] = key_path
+        if password:
+            connect_kwargs["password"] = password
+        ssh.connect(remote_host, **connect_kwargs)
 
         sftp = ssh.open_sftp()
         try:
@@ -309,10 +318,9 @@ async def transfer_all(
         Dict mapping filename -> success (bool).
     """
     results: dict = {}
-    method = detect_transfer_method(auth_type, rsync_available=(auth_type == "key"))
 
     for f in files:
-        if method == "rsync":
+        if auth_type == "key" and key_path and shutil.which("rsync"):
             ok = await transfer_file_rsync(
                 local_path=f,
                 remote_host=remote_host,
@@ -329,6 +337,7 @@ async def transfer_all(
                 remote_dir=remote_dir,
                 password=password,
                 progress_callback=progress_callback,
+                key_path=key_path,
             )
         results[f.name] = ok
 

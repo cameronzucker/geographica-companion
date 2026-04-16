@@ -29,6 +29,13 @@ class PipelineJob:
         return f".{self.pipeline}-state.json"
 
 
+_STATE_FILE_MAP = {
+    "basemap": "tnmaccess",
+    "noaa": "noaa",
+    "m2m": "m2m",
+}
+
+
 class Orchestrator:
     def __init__(self, pipelines_dir: Path, output_dir: Path, env: dict):
         self._pipelines_dir = pipelines_dir
@@ -86,7 +93,8 @@ class Orchestrator:
                 job.error = stderr[-1000:] if stderr else f"Exit code {rc}"
 
         # Read state file if it exists
-        state_file = self._output_dir / f".{pipeline}-state.json"
+        state_name = _STATE_FILE_MAP.get(pipeline, pipeline)
+        state_file = self._output_dir / f".{state_name}-state.json"
         if state_file.exists():
             try:
                 return json.loads(state_file.read_text())

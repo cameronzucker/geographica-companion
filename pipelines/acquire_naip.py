@@ -52,14 +52,21 @@ MAX_JP2_SIZE_BYTES = 30 * 1024 * 1024 * 1024  # 30 GB
 # GDAL environment for memory-safe operation on Pi 5
 GDAL_ENV = {
     **os.environ,
-    "GDAL_CACHEMAX": "256",
-    "GDAL_NUM_THREADS": "2",
+    "GDAL_CACHEMAX": "1024",
+    "GDAL_NUM_THREADS": "ALL_CPUS",
 }
 
 # ---------------------------------------------------------------------------
 # Cancellation
 # ---------------------------------------------------------------------------
 _cancel_requested = False
+
+
+def _handle_sigterm(signum, frame):
+    global _cancel_requested
+    _cancel_requested = True
+
+signal.signal(signal.SIGTERM, _handle_sigterm)
 
 
 # ---------------------------------------------------------------------------

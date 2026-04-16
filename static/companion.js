@@ -182,7 +182,7 @@ function initMap(tileUrl) {
     const canvas = map.getCanvasContainer();
 
     canvas.addEventListener('mousedown', (e) => {
-        if (e.shiftKey) return; // let map handle shift-drag
+        if (!e.shiftKey) return;
         if (e.button !== 0) return;
         e.preventDefault();
         bboxDrawing = true;
@@ -834,5 +834,9 @@ function formatSize(bytes) {
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
+
+async function estimatePipeline(name) {
+    log('Estimate not yet implemented for ' + name);
+}
 
 document.addEventListener('DOMContentLoaded', init);

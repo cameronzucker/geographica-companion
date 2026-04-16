@@ -152,6 +152,13 @@ RETRY_BACKOFF = 2  # seconds, doubled each attempt
 _cancel_requested = False
 
 
+def _handle_sigterm(signum, frame):
+    global _cancel_requested
+    _cancel_requested = True
+
+signal.signal(signal.SIGTERM, _handle_sigterm)
+
+
 def write_pipeline_state(output_path: Path, state: dict):
     """Atomically merge pipeline state JSON for the admin monitor.
 
@@ -1531,8 +1538,8 @@ NOAA_MAX_GEOTIFF_SIZE = 600 * 1024 * 1024  # 600 MB safety limit per tile
 # GDAL environment for memory-safe operation on Pi 5
 _NOAA_GDAL_ENV = {
     **os.environ,
-    "GDAL_CACHEMAX": "256",
-    "GDAL_NUM_THREADS": "2",
+    "GDAL_CACHEMAX": "1024",
+    "GDAL_NUM_THREADS": "ALL_CPUS",
 }
 
 
@@ -1648,16 +1655,31 @@ async def run_noaa(args):
             except Exception:
                 pass
 
-    # Validate catalog entry
-    if (state, year) not in NOAA_NAIP_CATALOG:
+    # Validate catalog entry (skip if no --state provided — bbox-only mode)
+    if state and (state, year) not in NOAA_NAIP_CATALOG:
         log.error("No NOAA catalog entry for state=%s year=%d", state, year)
         update_progress(output, "noaa", args.bbox, "n/a",
                         0, 0, status="error", phase="error",
                         error=f"No NOAA catalog entry for {state} {year}")
         sys.exit(1)
 
-    blob_base = noaa_blob_base_url(state, year)
-    cache_dir = noaa_cache_dir(data_dir, state, year)
+    if state:
+        blob_base = noaa_blob_base_url(state, year)
+        cache_dir = noaa_cache_dir(data_dir, state, year)
+    else:
+        # No state provided — use bbox-only mode with first available catalog entry
+        # Pick the first catalog entry as a fallback
+        if NOAA_NAIP_CATALOG:
+            first_key = next(iter(NOAA_NAIP_CATALOG))
+            blob_base = noaa_blob_base_url(*first_key)
+            cache_dir = noaa_cache_dir(data_dir, first_key[0], first_key[1])
+            log.info("No --state provided, using catalog entry %s/%d", first_key[0], first_key[1])
+        else:
+            log.error("No NOAA catalog entries available and no --state provided")
+            update_progress(output, "noaa", args.bbox, "n/a",
+                            0, 0, status="error", phase="error",
+                            error="No NOAA catalog entries available")
+            sys.exit(1)
     staging = cache_dir / "staging"
     staging.mkdir(parents=True, exist_ok=True)
 
@@ -1981,8 +2003,7 @@ def main():
 
     if args.mode == "noaa":
         if not args.state:
-            log.error("NOAA mode requires --state (e.g. --state AZ)")
-            sys.exit(1)
+            log.warning("No --state provided; NOAA mode will use bbox as sole constraint")
         asyncio.run(run_noaa(args))
     elif args.mode == "tnmaccess":
         asyncio.run(run_tnmaccess(args))

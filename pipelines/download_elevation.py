@@ -48,6 +48,13 @@ RETRY_BACKOFF = 2
 _cancel_requested = False
 
 
+def _handle_sigterm(signum, frame):
+    global _cancel_requested
+    _cancel_requested = True
+
+signal.signal(signal.SIGTERM, _handle_sigterm)
+
+
 def write_pipeline_state(output_path, state: dict):
     """Atomically merge pipeline state JSON for the admin monitor.
 
