@@ -372,6 +372,10 @@ async function startPipeline(name) {
         args.source = document.getElementById('import-source').value;
     }
 
+    // Clear error-logged flag so a new failure gets logged
+    const startCard = document.querySelector('[data-pipeline="' + name + '"]');
+    if (startCard) delete startCard.dataset.errorLogged;
+
     try {
         const resp = await fetch('/api/pipelines/start', {
             method: 'POST',
@@ -490,7 +494,16 @@ async function pollStates() {
                 if (btnCancel) btnCancel.classList.add('hidden');
                 if (statusEl) {
                     statusEl.className = 'card-status status status-error';
-                    statusEl.textContent = 'Error' + (msg ? ': ' + msg : '');
+                    // Show last meaningful line of error on card
+                    const errorLines = (msg || 'Unknown error').trim().split('\n').filter(l => l.trim());
+                    const lastLine = errorLines[errorLines.length - 1] || 'Unknown error';
+                    statusEl.textContent = 'Error: ' + lastLine.substring(0, 200);
+                    statusEl.title = msg || '';  // full error on hover
+                }
+                // Log full error to console panel
+                if (msg && !card.dataset.errorLogged) {
+                    card.dataset.errorLogged = '1';
+                    log('Pipeline ' + name + ' failed:\n' + msg);
                 }
             } else if (phase === 'cancelled') {
                 if (progressBar) progressBar.classList.add('hidden');
