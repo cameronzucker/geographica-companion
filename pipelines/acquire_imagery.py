@@ -1821,32 +1821,45 @@ async def run_noaa(args):
             await reproject_queue.put(None)
 
         async def _reprojector():
-            """Stage 2: reproject tiles in parallel thread pool, feed merge queue."""
+            """Stage 2: reproject tiles in parallel thread pool, feed merge queue.
+
+            Uses non-blocking queue get with a timeout so completed futures
+            are drained even when no new work arrives from the downloader.
+            This prevents a deadlock where the reprojector sits at
+            reproject_queue.get() while completed warped files pile up
+            in pending_futures, starving the merger.
+            """
             nonlocal tiles_reprojected
             pending_futures = []
+            sentinel_received = False
 
-            while True:
-                item = await reproject_queue.get()
-                if item is None:
-                    break
-                idx, tile_fname, raw_path = item
+            while not sentinel_received or pending_futures:
+                # Try to get new work, but don't block forever — we need to
+                # drain completed futures even when no new downloads arrive
+                try:
+                    item = await asyncio.wait_for(reproject_queue.get(), timeout=0.5)
+                    if item is None:
+                        sentinel_received = True
+                    else:
+                        idx, tile_fname, raw_path = item
 
-                if _cancel_requested or raw_path is None:
-                    if raw_path:
-                        raw_path.unlink(missing_ok=True)
-                    if raw_path is None:
-                        await merge_queue.put((idx, tile_fname, None))
-                    continue
+                        if _cancel_requested or raw_path is None:
+                            if raw_path:
+                                raw_path.unlink(missing_ok=True)
+                            if raw_path is None:
+                                await merge_queue.put((idx, tile_fname, None))
+                        else:
+                            log.info("[%d/%d] Reprojecting %s (%d workers)",
+                                     idx + 1, total_tiles, tile_fname, REPROJECT_WORKERS)
 
-                log.info("[%d/%d] Reprojecting %s (%d workers)",
-                         idx + 1, total_tiles, tile_fname, REPROJECT_WORKERS)
+                            future = loop.run_in_executor(
+                                reproject_pool, _reproject_tile, raw_path, tile_fname
+                            )
+                            pending_futures.append((idx, tile_fname, future))
+                except asyncio.TimeoutError:
+                    pass  # No new work — just drain completed futures below
 
-                future = loop.run_in_executor(
-                    reproject_pool, _reproject_tile, raw_path, tile_fname
-                )
-                pending_futures.append((idx, tile_fname, future))
-
-                # Drain completed futures to keep memory bounded
+                # Always drain completed futures
                 still_pending = []
                 for f_idx, f_fname, f_future in pending_futures:
                     if f_future.done():
@@ -1858,14 +1871,6 @@ async def run_noaa(args):
                     else:
                         still_pending.append((f_idx, f_fname, f_future))
                 pending_futures = still_pending
-
-            # Drain remaining futures
-            for f_idx, f_fname, f_future in pending_futures:
-                warped = await f_future
-                with counter_lock:
-                    tiles_reprojected += 1
-                _write_progress()
-                await merge_queue.put((f_idx, f_fname, warped))
 
             await merge_queue.put(None)
 
