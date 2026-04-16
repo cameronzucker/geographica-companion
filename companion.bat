@@ -38,12 +38,30 @@ for /f "tokens=1,2 delims=." %%A in ("%PY_VER%") do (
 if not exist ".venv" (
     echo Creating virtual environment...
     %PYTHON% -m venv .venv
+    if %errorlevel% neq 0 (
+        echo ERROR: Failed to create virtual environment.
+        pause
+        exit /b 1
+    )
+)
+
+if not exist ".venv\Scripts\activate.bat" (
+    echo ERROR: Virtual environment is missing activation script.
+    echo Try deleting the .venv folder and running again.
+    pause
+    exit /b 1
 )
 
 call .venv\Scripts\activate.bat
 
 :: Install dependencies
+echo Installing dependencies...
 pip install -q -r requirements.txt
+if %errorlevel% neq 0 (
+    echo ERROR: Failed to install dependencies.
+    pause
+    exit /b 1
+)
 
 :: Set GDAL environment
 if exist "bin\windows-x64\gdalwarp.exe" (
@@ -61,5 +79,15 @@ if exist "bin\windows-x64\gdalwarp.exe" (
 )
 
 echo Starting Geographica Companion...
+echo.
+echo If the browser doesn't open automatically, visit:
+echo   http://127.0.0.1:9000
+echo.
+echo Press Ctrl+C to stop the server.
+echo.
 python companion.py
+if %errorlevel% neq 0 (
+    echo.
+    echo ERROR: Companion server exited with an error.
+)
 pause
