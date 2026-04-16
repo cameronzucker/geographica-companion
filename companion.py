@@ -280,11 +280,27 @@ async def debug_pipeline(name: str):
     }
 
 
+_PIPELINES_REQUIRING_GDAL = {"basemap", "noaa", "m2m", "sentinel", "elevation", "import"}
+
+
 @app.post("/api/pipelines/start")
 async def start_pipeline(request: StartRequest):
     pipeline_name = request.pipeline
     if pipeline_name not in _PIPELINE_DEF_MAP:
         raise HTTPException(status_code=400, detail=f"Unknown pipeline: {pipeline_name!r}")
+
+    # Check GDAL availability before wasting time
+    if pipeline_name in _PIPELINES_REQUIRING_GDAL:
+        gdal_bin_dir = gdal_env.detect_gdal()
+        if gdal_bin_dir is None and shutil.which("gdalwarp") is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "GDAL is required but not found. "
+                    "Install OSGeo4W (https://trac.osgeo.org/osgeo4w/) or "
+                    "set GDAL_BIN_DIR to your GDAL bin directory."
+                ),
+            )
 
     defn = _PIPELINE_DEF_MAP[pipeline_name]
     cli_args = _build_cli_args(pipeline_name, request.args)
