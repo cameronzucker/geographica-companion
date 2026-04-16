@@ -71,15 +71,18 @@ def _init_mbtiles(db_path: Path, metadata: dict | None = None) -> sqlite3.Connec
 
 
 def _tile_bounds(x: int, y: int, z: int) -> tuple[float, float, float, float]:
-    """Return (west, south, east, north) in EPSG:3857 for a TMS tile."""
+    """Return (west, south, east, north) in EPSG:3857 for a slippy-map tile.
+
+    Uses top-origin Y convention (y=0 at north pole), matching _lonlat_to_tile.
+    """
     n = 2 ** z
     origin = 20037508.342789244
     tile_size = 2 * origin / n
     west = -origin + x * tile_size
     east = west + tile_size
-    # TMS y-origin is bottom
-    south = -origin + y * tile_size
-    north = south + tile_size
+    # Slippy map y-origin is top (north pole)
+    north = origin - y * tile_size
+    south = north - tile_size
     return (west, south, east, north)
 
 
