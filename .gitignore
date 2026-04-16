@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+geographica-data/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+bin/linux-x64/
+bin/windows-x64/
