@@ -38,6 +38,12 @@ def build_cli_args(set_output_dir):
 # Parser factories — mirror each pipeline's argparse exactly
 # ---------------------------------------------------------------------------
 
+def _add_common_flags(parser):
+    """Add flags common to all pipeline scripts."""
+    parser.add_argument("--verbose", "-v", action="store_true", default=False)
+    return parser
+
+
 def _acquire_imagery_parser():
     """Mirror of pipelines/acquire_imagery.py argparse (line 1951-2001)."""
     parser = argparse.ArgumentParser(prog="acquire_imagery.py")
@@ -53,7 +59,7 @@ def _acquire_imagery_parser():
     parser.add_argument("--m2m-token", default=None)
     parser.add_argument("--state", default=None)
     parser.add_argument("--year", type=int, default=2021)
-    return parser
+    return _add_common_flags(parser)
 
 
 def _download_elevation_parser():
@@ -63,7 +69,7 @@ def _download_elevation_parser():
     parser.add_argument("--zoom", default="0-12")
     parser.add_argument("--output", default="data/elevation.mbtiles")
     parser.add_argument("--concurrency", type=int, default=10)
-    return parser
+    return _add_common_flags(parser)
 
 
 def _acquire_sentinel_parser():
@@ -79,7 +85,7 @@ def _acquire_sentinel_parser():
     parser.add_argument("--single", dest="composite", action="store_false")
     parser.add_argument("--concurrency", type=int, default=3)
     parser.add_argument("--api-key", default=None)
-    return parser
+    return _add_common_flags(parser)
 
 
 def _import_imagery_parser():
@@ -91,6 +97,7 @@ def _import_imagery_parser():
     parser.add_argument("--name", default=None)
     parser.add_argument("--delete-after", action="store_true")
     parser.add_argument("--tileserver-config", default=None)
+    _add_common_flags(parser)
     return parser
 
 

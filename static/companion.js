@@ -376,6 +376,11 @@ async function startPipeline(name) {
         args.source = document.getElementById('import-source').value;
     }
 
+    const verboseEl = document.getElementById('verbose-logging');
+    if (verboseEl && verboseEl.checked) {
+        args.verbose = true;
+    }
+
     // Clear error-logged flag so a new failure gets logged
     const startCard = document.querySelector('[data-pipeline="' + name + '"]');
     if (startCard) delete startCard.dataset.errorLogged;

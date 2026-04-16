@@ -20,6 +20,7 @@ import math
 import os
 import sqlite3
 import struct
+import time
 from pathlib import Path
 
 import numpy as np
@@ -200,6 +201,7 @@ def reproject_to_mercator(
               -co COMPRESS=DEFLATE <src> <dst>
     """
     resamp = getattr(Resampling, resampling, Resampling.lanczos)
+    t0 = time.monotonic()
 
     try:
         with rasterio.open(str(src_path)) as src:
@@ -238,6 +240,9 @@ def reproject_to_mercator(
                         resampling=resamp,
                         num_threads=os.cpu_count() or 2,
                     )
+        elapsed = time.monotonic() - t0
+        log.debug("Reproject %s: %dx%d → %dx%d in %.1fs",
+                  src_path.name, src.width, src.height, width, height, elapsed)
         return True
 
     except Exception as exc:
@@ -336,11 +341,16 @@ def merge_to_mbtiles(
             tile_dir.mkdir(parents=True, exist_ok=True)
 
             encode_fn = _encode_jpeg if tile_format.lower() == "jpeg" else _encode_png
+            t_render = time.monotonic()
             tile_count = _rasterize_to_disk(
                 mosaic, mosaic_transform, first_crs,
                 tile_dir, min_zoom, max_zoom,
                 encode_fn, quality, cancel_check,
             )
+            render_elapsed = time.monotonic() - t_render
+            log.debug("Tile rendering: %d tiles in %.1fs (%.0f tiles/sec)",
+                      tile_count, render_elapsed,
+                      tile_count / render_elapsed if render_elapsed > 0 else 0)
 
             if cancel_check and cancel_check():
                 _cleanup_tile_dir(tile_dir)
@@ -348,10 +358,15 @@ def merge_to_mbtiles(
 
             # Stage 2: bulk import from filesystem to MBTiles
             if tile_count > 0:
+                t_import = time.monotonic()
                 _bulk_import_tiles(
                     tile_dir, output_path, tile_format,
                     min_zoom, max_zoom, bounds_4326,
                 )
+                import_elapsed = time.monotonic() - t_import
+                log.debug("Bulk import: %d tiles in %.1fs (%.0f tiles/sec)",
+                          tile_count, import_elapsed,
+                          tile_count / import_elapsed if import_elapsed > 0 else 0)
 
             # Clean up tile directory
             _cleanup_tile_dir(tile_dir)

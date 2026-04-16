@@ -57,6 +57,22 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+
+class _Timer:
+    """Context manager that logs elapsed time for a named operation."""
+    def __init__(self, label: str, level=logging.DEBUG):
+        self.label = label
+        self.level = level
+    def __enter__(self):
+        self.start = time.monotonic()
+        return self
+    def __exit__(self, *exc):
+        elapsed = time.monotonic() - self.start
+        if elapsed >= 60:
+            log.log(self.level, "%s completed in %.1f min", self.label, elapsed / 60)
+        else:
+            log.log(self.level, "%s completed in %.1f sec", self.label, elapsed)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -1520,10 +1536,11 @@ async def _noaa_fetch_tile_index(
 async def run_noaa(args):
     """Run the NOAA Digital Coast NAIP download pipeline.
 
-    Downloads GeoTIFF tiles ONE AT A TIME from NOAA Azure blob storage,
-    reprojects each to EPSG:3857, converts to MBTiles, then cleans up.
+    Downloads GeoTIFF tiles from NOAA Azure blob storage via 3-stage parallel
+    pipeline, reprojects to EPSG:3857, renders to tiles, merges to MBTiles.
     """
     global _cancel_requested
+    pipeline_start = time.monotonic()
 
     state = args.state
     year = args.year
@@ -1710,6 +1727,7 @@ async def run_noaa(args):
             """Download and validate a single tile."""
             url = f"{blob_base}/{tile_fname}"
             dest = staging / tile_fname
+            t0 = time.monotonic()
             async with download_sem:
                 if _cancel_requested:
                     return (tile_fname, None)
@@ -1722,11 +1740,18 @@ async def run_noaa(args):
                 log.error("Invalid GeoTIFF header for %s — removing", tile_fname)
                 dest.unlink(missing_ok=True)
                 return (tile_fname, None)
+            elapsed = time.monotonic() - t0
+            size_mb = dest.stat().st_size / (1024 * 1024) if dest.exists() else 0
+            log.debug("Download done: %s — %.0f MB in %.1fs (%.1f MB/s)",
+                      tile_fname, size_mb, elapsed, size_mb / elapsed if elapsed > 0 else 0)
             return (tile_fname, dest)
 
         def _reproject_tile(raw_path, tile_fname):
             """Reproject a single tile to EPSG:3857. Runs in thread pool."""
             warped_path = staging / f"warped_{tile_fname}"
+            t0 = time.monotonic()
+            raw_size = raw_path.stat().st_size / (1024 * 1024)
+            log.debug("Reproject start: %s (%.0f MB)", tile_fname, raw_size)
             try:
                 success = rio_reproject_to_mercator(
                     raw_path, warped_path,
@@ -1742,12 +1767,21 @@ async def run_noaa(args):
                 raw_path.unlink(missing_ok=True)
                 warped_path.unlink(missing_ok=True)
                 return None
+            elapsed = time.monotonic() - t0
+            warped_size = warped_path.stat().st_size / (1024 * 1024) if warped_path.exists() else 0
+            log.debug("Reproject done: %s — %.0f MB → %.0f MB in %.1fs (%.1f MB/s)",
+                      tile_fname, raw_size, warped_size, elapsed, raw_size / elapsed if elapsed > 0 else 0)
             raw_path.unlink(missing_ok=True)
             return warped_path
 
         def _merge_tile(warped_path, idx):
             """Merge a reprojected tile into the output MBTiles. Runs serially."""
+            t0 = time.monotonic()
+            warped_size = warped_path.stat().st_size / (1024 * 1024) if warped_path.exists() else 0
+            log.debug("Merge start: tile %d (%.0f MB warped)", idx, warped_size)
             ok = convert_batch_to_mbtiles([warped_path], output, f"noaa_tile_{idx}")
+            elapsed = time.monotonic() - t0
+            log.debug("Merge done: tile %d in %.1fs (%s)", idx, elapsed, "OK" if ok else "FAILED")
             warped_path.unlink(missing_ok=True)
             return ok
 
@@ -1936,8 +1970,13 @@ async def run_noaa(args):
                         phase="complete",
                         geotiffs_downloaded=tiles_done,
                         geotiffs_total=total_tiles)
+        total_elapsed = time.monotonic() - pipeline_start
+        output_size = output.stat().st_size / (1024 * 1024) if output.exists() else 0
         log.info("NOAA pipeline complete: %d/%d tiles processed (%d failed) → %s",
                  tiles_done, total_tiles, tiles_failed, output)
+        log.info("Total time: %.1f min | Output: %.1f MB | Throughput: %.1f tiles/min",
+                 total_elapsed / 60, output_size,
+                 tiles_done / (total_elapsed / 60) if total_elapsed > 0 else 0)
 
 
 # ---------------------------------------------------------------------------
@@ -1995,8 +2034,16 @@ def main():
         "--year", type=int, default=2021,
         help="NAIP year for NOAA mode (default: %(default)s)",
     )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Enable verbose/debug logging with timing for each operation",
+    )
 
     args = parser.parse_args()
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+        log.debug("Verbose logging enabled")
 
     if args.mode == "noaa":
         if not args.state:

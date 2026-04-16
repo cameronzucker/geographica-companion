@@ -157,6 +157,9 @@ def _build_cli_args(pipeline_name: str, args: dict) -> list[str]:
     """
     cli: list[str] = []
 
+    # Verbose logging flag
+    verbose = args.pop("verbose", False)
+
     # Common args present in most pipelines — strip whitespace from bbox
     bbox = (args.get("bbox") or "").strip() or None
     output = args.get("output") or str(COMPANION_OUTPUT_DIR / f"{pipeline_name}.mbtiles")
@@ -214,6 +217,9 @@ def _build_cli_args(pipeline_name: str, args: dict) -> list[str]:
         # Generic fallback: pass all args as --key=value pairs
         for k, v in args.items():
             cli += [f"--{k}={v}"]
+
+    if verbose:
+        cli += ["--verbose"]
 
     return cli
 
