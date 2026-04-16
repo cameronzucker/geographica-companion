@@ -318,6 +318,21 @@ function getSelectedStates() {
 
 async function startPipeline(name) {
     const bbox = getBbox();
+
+    // Require bbox for all pipelines except import
+    if (!bbox && name !== 'import') {
+        log('Error: Draw a bounding box on the map before starting a pipeline.');
+        const card = document.querySelector('[data-pipeline="' + name + '"]');
+        if (card) {
+            const statusEl = card.querySelector('[data-status="' + name + '"]');
+            if (statusEl) {
+                statusEl.className = 'card-status status status-error';
+                statusEl.textContent = 'Draw a bounding box first';
+            }
+        }
+        return;
+    }
+
     const args = {};
     if (bbox) args.bbox = bbox;
 

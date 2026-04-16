@@ -257,6 +257,11 @@ async def start_pipeline(request: StartRequest):
     defn = _PIPELINE_DEF_MAP[pipeline_name]
     cli_args = _build_cli_args(pipeline_name, request.args)
 
+    import logging
+    logging.info(f"Starting pipeline {pipeline_name} with args: {cli_args}")
+    print(f"[DEBUG] Pipeline {pipeline_name} request.args = {request.args}")
+    print(f"[DEBUG] Pipeline {pipeline_name} cli_args = {cli_args}")
+
     orch = get_orchestrator()
     job = PipelineJob(
         pipeline=pipeline_name,
