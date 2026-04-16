@@ -300,43 +300,28 @@ def merge_to_mbtiles(
 
     Replaces: gdalbuildvrt <vrt> <files...> && gdal_translate -of MBTiles <vrt> <out>
 
-    For large datasets, processes files in a streaming fashion rather than
-    loading everything into memory at once.
+    Renders tiles to the filesystem first (no lock contention), then
+    bulk-imports into MBTiles in a single fast pass.
     """
     if not input_paths:
         log.error("No input files to merge")
         return False
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    encode_fn = _encode_jpeg if tile_format.lower() == "jpeg" else _encode_png
 
     try:
         # Open all datasets
         datasets = [rasterio.open(str(p)) for p in input_paths]
 
         try:
-            # Merge to get combined bounds and resolution
             mosaic, mosaic_transform = rasterio_merge(datasets)
 
             if cancel_check and cancel_check():
                 return False
 
-            # Determine zoom levels from resolution
-            res_x = abs(mosaic_transform.a)
-            # Approximate zoom from resolution in source CRS
-            # For EPSG:3857, resolution at zoom z = 20037508.342789244 * 2 / (256 * 2^z)
-            # For EPSG:4326, approximate using equatorial conversion
             first_crs = datasets[0].crs
-            if first_crs == WEB_MERCATOR:
-                max_zoom = max(0, int(math.log2(20037508.342789244 * 2 / (TILE_SIZE * res_x))))
-            else:
-                # Convert degrees to approximate meters at equator
-                res_meters = res_x * 111320
-                max_zoom = max(0, int(math.log2(20037508.342789244 * 2 / (TILE_SIZE * res_meters))))
+            min_zoom, max_zoom = _compute_zoom_range(mosaic_transform, first_crs)
 
-            min_zoom = max(0, max_zoom - 4)
-
-            # Get bounds in EPSG:4326 for metadata
             from rasterio.warp import transform_bounds
             bounds_4326 = transform_bounds(first_crs, CRS.from_epsg(4326), *datasets[0].bounds)
             for ds in datasets[1:]:
@@ -346,25 +331,30 @@ def merge_to_mbtiles(
                     max(bounds_4326[2], b[2]), max(bounds_4326[3], b[3]),
                 )
 
-            # Create MBTiles
-            conn = _init_mbtiles(output_path, {
-                "name": output_path.stem,
-                "format": tile_format.lower(),
-                "type": "overlay",
-                "minzoom": str(min_zoom),
-                "maxzoom": str(max_zoom),
-                "bounds": f"{bounds_4326[0]},{bounds_4326[1]},{bounds_4326[2]},{bounds_4326[3]}",
-            })
+            # Stage 1: render tiles to filesystem (no SQLite lock)
+            tile_dir = output_path.parent / f".tiles_{output_path.stem}"
+            tile_dir.mkdir(parents=True, exist_ok=True)
 
-            try:
-                _rasterize_to_tiles(
-                    mosaic, mosaic_transform, first_crs,
-                    conn, min_zoom, max_zoom,
-                    encode_fn, quality, cancel_check,
+            encode_fn = _encode_jpeg if tile_format.lower() == "jpeg" else _encode_png
+            tile_count = _rasterize_to_disk(
+                mosaic, mosaic_transform, first_crs,
+                tile_dir, min_zoom, max_zoom,
+                encode_fn, quality, cancel_check,
+            )
+
+            if cancel_check and cancel_check():
+                _cleanup_tile_dir(tile_dir)
+                return False
+
+            # Stage 2: bulk import from filesystem to MBTiles
+            if tile_count > 0:
+                _bulk_import_tiles(
+                    tile_dir, output_path, tile_format,
+                    min_zoom, max_zoom, bounds_4326,
                 )
-                conn.commit()
-            finally:
-                conn.close()
+
+            # Clean up tile directory
+            _cleanup_tile_dir(tile_dir)
 
         finally:
             for ds in datasets:
@@ -391,50 +381,60 @@ def translate_to_mbtiles(
     return merge_to_mbtiles([src_path], output_path, tile_format, quality, cancel_check)
 
 
-def _rasterize_to_tiles(
+def _compute_zoom_range(transform, crs) -> tuple[int, int]:
+    """Compute min/max zoom from raster resolution."""
+    res_x = abs(transform.a)
+    if crs == WEB_MERCATOR:
+        max_zoom = max(0, int(math.log2(20037508.342789244 * 2 / (TILE_SIZE * res_x))))
+    else:
+        res_meters = res_x * 111320
+        max_zoom = max(0, int(math.log2(20037508.342789244 * 2 / (TILE_SIZE * res_meters))))
+    min_zoom = max(0, max_zoom - 4)
+    return min_zoom, max_zoom
+
+
+def _rasterize_to_disk(
     data: np.ndarray,
     transform,
     src_crs,
-    conn: sqlite3.Connection,
+    tile_dir: Path,
     min_zoom: int,
     max_zoom: int,
     encode_fn,
     quality: int,
     cancel_check=None,
-):
-    """Render a merged raster array into 256x256 tiles and write to MBTiles."""
+) -> int:
+    """Render raster into {z}/{x}/{y}.{ext} tile files on the filesystem.
+
+    No database involved — fully parallelizable, zero lock contention.
+    Returns the number of tiles written.
+    """
     from rasterio.warp import transform_bounds
 
-    # Get bounds in EPSG:4326 for tile coordinate calculation
     left = transform.c
     top = transform.f
     right = left + transform.a * data.shape[2]
     bottom = top + transform.e * data.shape[1]
-
     bounds_4326 = transform_bounds(src_crs, CRS.from_epsg(4326), left, bottom, right, top)
 
     tile_count = 0
     for zoom in range(min_zoom, max_zoom + 1):
         if cancel_check and cancel_check():
-            return
+            return tile_count
 
-        # Calculate tile range for this zoom
         x_min, y_min = _lonlat_to_tile(bounds_4326[0], bounds_4326[3], zoom)
         x_max, y_max = _lonlat_to_tile(bounds_4326[2], bounds_4326[1], zoom)
 
         for tx in range(x_min, x_max + 1):
             for ty in range(y_min, y_max + 1):
                 if cancel_check and cancel_check():
-                    return
+                    return tile_count
 
-                # Get tile bounds in source CRS
                 tile_bounds_3857 = _tile_bounds(tx, ty, zoom)
                 tile_bounds_src = transform_bounds(
-                    WEB_MERCATOR, src_crs,
-                    *tile_bounds_3857,
+                    WEB_MERCATOR, src_crs, *tile_bounds_3857,
                 )
 
-                # Read the portion of the mosaic that covers this tile
                 tile_data = _read_tile_from_array(
                     data, transform, tile_bounds_src, TILE_SIZE,
                 )
@@ -442,23 +442,86 @@ def _rasterize_to_tiles(
                 if tile_data is None or _is_empty_tile(tile_data):
                     continue
 
-                # Encode and write
                 tile_bytes = encode_fn(tile_data, quality) if encode_fn == _encode_jpeg else encode_fn(tile_data)
 
-                # MBTiles uses TMS y-flip
+                # TMS y-flip
                 tms_y = (2 ** zoom - 1) - ty
-                conn.execute(
-                    "INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?, ?, ?, ?)",
-                    (zoom, tx, tms_y, tile_bytes),
-                )
+
+                # Write to {z}/{x}/{y}.tile
+                z_dir = tile_dir / str(zoom) / str(tx)
+                z_dir.mkdir(parents=True, exist_ok=True)
+                (z_dir / f"{tms_y}.tile").write_bytes(tile_bytes)
                 tile_count += 1
 
                 if tile_count % 1000 == 0:
-                    conn.commit()
-                    log.info("Written %d tiles (zoom %d)", tile_count, zoom)
+                    log.info("Rendered %d tiles to disk (zoom %d)", tile_count, zoom)
 
-    conn.commit()
-    log.info("Total tiles written: %d", tile_count)
+    log.info("Total tiles rendered to disk: %d", tile_count)
+    return tile_count
+
+
+def _bulk_import_tiles(
+    tile_dir: Path,
+    output_path: Path,
+    tile_format: str,
+    min_zoom: int,
+    max_zoom: int,
+    bounds_4326: tuple[float, float, float, float],
+) -> None:
+    """Bulk-import tile files from filesystem into MBTiles SQLite.
+
+    Single sequential scan — reads tile files and inserts in large transactions.
+    Much faster than one-at-a-time INSERT during concurrent processing.
+    """
+    conn = _init_mbtiles(output_path, {
+        "name": output_path.stem,
+        "format": tile_format.lower(),
+        "type": "overlay",
+        "minzoom": str(min_zoom),
+        "maxzoom": str(max_zoom),
+        "bounds": f"{bounds_4326[0]},{bounds_4326[1]},{bounds_4326[2]},{bounds_4326[3]}",
+    })
+
+    tile_count = 0
+    try:
+        # Walk the {z}/{x}/{y}.tile directory structure
+        for z_dir in sorted(tile_dir.iterdir()):
+            if not z_dir.is_dir():
+                continue
+            zoom = int(z_dir.name)
+            for x_dir in sorted(z_dir.iterdir()):
+                if not x_dir.is_dir():
+                    continue
+                tx = int(x_dir.name)
+                for tile_file in x_dir.iterdir():
+                    if not tile_file.suffix == ".tile":
+                        continue
+                    tms_y = int(tile_file.stem)
+                    tile_bytes = tile_file.read_bytes()
+
+                    conn.execute(
+                        "INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?, ?, ?, ?)",
+                        (zoom, tx, tms_y, tile_bytes),
+                    )
+                    tile_count += 1
+
+                    if tile_count % 5000 == 0:
+                        conn.commit()
+                        log.info("Imported %d tiles into MBTiles (zoom %d)", tile_count, zoom)
+
+        conn.commit()
+        log.info("Bulk import complete: %d tiles", tile_count)
+    finally:
+        conn.close()
+
+
+def _cleanup_tile_dir(tile_dir: Path) -> None:
+    """Remove the temporary tile directory."""
+    import shutil
+    try:
+        shutil.rmtree(tile_dir, ignore_errors=True)
+    except Exception:
+        pass
 
 
 def _lonlat_to_tile(lon: float, lat: float, zoom: int) -> tuple[int, int]:
