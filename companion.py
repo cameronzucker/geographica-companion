@@ -6,6 +6,7 @@ to 127.0.0.1 for security.
 """
 
 import asyncio
+import logging
 import os
 import secrets
 import shutil
@@ -21,6 +22,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 
 import gdal_env
+
+log = logging.getLogger("companion")
 from pipelines.orchestrator import Orchestrator, PipelineJob
 
 # ---------------------------------------------------------------------------
@@ -256,6 +259,27 @@ async def get_pipeline_state(name: str):
     return orch.read_state(name)
 
 
+@app.get("/api/pipelines/{name}/debug")
+async def debug_pipeline(name: str):
+    """Debug endpoint — returns raw job state including error output."""
+    orch = get_orchestrator()
+    job = orch.get_job(name)
+    if job is None:
+        return {"job": None, "state": orch.read_state(name)}
+    return {
+        "job": {
+            "pipeline": job.pipeline,
+            "script": job.script,
+            "args": job.args,
+            "status": job.status,
+            "error": job.error,
+            "pid": job.process.pid if job.process else None,
+            "returncode": job.process.poll() if job.process else None,
+        },
+        "state": orch.read_state(name),
+    }
+
+
 @app.post("/api/pipelines/start")
 async def start_pipeline(request: StartRequest):
     pipeline_name = request.pipeline
@@ -272,6 +296,7 @@ async def start_pipeline(request: StartRequest):
         args=cli_args,
     )
     await orch.start(job)
+    log.info("Started pipeline %s: %s %s", pipeline_name, defn["script"], cli_args)
     return {"status": "started", "pipeline": pipeline_name, "args": cli_args}
 
 

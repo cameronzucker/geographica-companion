@@ -6,6 +6,7 @@ from module-level globals, signal handlers, and POSIX-specific code.
 
 import asyncio
 import json
+import logging
 import os
 import platform
 import signal
@@ -13,6 +14,8 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+log = logging.getLogger("orchestrator")
 
 
 @dataclass
@@ -91,6 +94,9 @@ class Orchestrator:
                     pass
                 job.status = "completed" if rc == 0 else "failed"
                 job.error = output[-1000:] if output else (f"Exit code {rc}" if rc != 0 else None)
+                if rc != 0:
+                    log.error("Pipeline %s exited with code %d:\n%s",
+                              job.pipeline, rc, output[-2000:] if output else "(no output)")
 
         # Job failure/cancellation takes priority over stale state files.
         # A state file from a previous run must not mask a fresh crash.
